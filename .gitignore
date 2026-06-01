@@ -1,0 +1,31 @@
+# Environment and secrets
+.env
+.env.*
+*.env
+
+# MCP config contains API keys — keep local only
+.mcp.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+*.swp
+*.swo
+
+# Node
+node_modules/
+
+# ASX MCP server — venv and cache are local only
+.asx-mcp/venv/
+.asx-mcp/cache/
+
+# Next.js
+web/.next/
+web/data/*.db
+web/data/sharesight-tokens.json
+.asx-mcp
+CommSec*.csv
+*.csv
