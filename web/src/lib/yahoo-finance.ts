@@ -146,6 +146,7 @@ export async function getMetalPrices(): Promise<MetalPrices> {
     const goldUsd   = goldCache.lastPrice ?? 0;
     const silverUsd = silverCache?.lastPrice ?? 0;
     const audUsd    = audCache.lastPrice ?? 0;
+    // Always compute AUD prices via USD/AUDUSD — never expose raw USD values as AUD
     const goldAud   = audUsd > 0 ? goldUsd / audUsd : 0;
     const silverAud = audUsd > 0 ? silverUsd / audUsd : 0;
     return {
@@ -161,6 +162,7 @@ export async function getMetalPrices(): Promise<MetalPrices> {
   }
 
   // Fetch live — GC=F (gold futures USD/oz), SI=F (silver futures USD/oz), AUDUSD=X
+  // AUD prices are always derived as: priceUsd / audUsd — never exposed as raw USD
   const [gold, silver, fx] = await Promise.all([
     getRawQuote("GC=F"),
     getRawQuote("SI=F"),
@@ -170,6 +172,7 @@ export async function getMetalPrices(): Promise<MetalPrices> {
   const audUsd    = fx.price;
   const goldUsd   = gold.price;
   const silverUsd = silver.price;
+  // Guard against missing FX rate — fall back to 0 rather than showing USD price as AUD
   const goldAud   = audUsd > 0 ? goldUsd / audUsd : 0;
   const silverAud = audUsd > 0 ? silverUsd / audUsd : 0;
 

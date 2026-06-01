@@ -26,11 +26,22 @@ export default async function ReportPage({ params }: { params: Promise<{ ticker:
 
   const fm = latest.frontmatter;
 
-  let quote = null;
-  try { quote = await getQuote(decodedTicker); } catch {}
+  // Commodity reports (gold, silver, etc.) use AUD frontmatter fields and spot price —
+  // not a live Yahoo Finance equity quote
+  const isCommodity = !!fm.commodity;
 
-  const mos = fm.intrinsicValueHigh && quote
-    ? ((fm.intrinsicValueHigh - quote.lastPrice) / fm.intrinsicValueHigh) * 100
+  let quote = null;
+  if (!isCommodity) {
+    try { quote = await getQuote(decodedTicker); } catch {}
+  }
+
+  // For commodities use AUD IV fields; for equities use the standard IV fields
+  const ivLow  = isCommodity ? fm.intrinsicValueLowAUD  : fm.intrinsicValueLow;
+  const ivHigh = isCommodity ? fm.intrinsicValueHighAUD : fm.intrinsicValueHigh;
+  const displayPrice = isCommodity ? fm.spotPriceAUD : quote?.lastPrice ?? null;
+
+  const mos = ivHigh && displayPrice
+    ? ((ivHigh - displayPrice) / ivHigh) * 100
     : null;
 
   return (
@@ -48,33 +59,44 @@ export default async function ReportPage({ params }: { params: Promise<{ ticker:
           {(fm.companyName || fm.company) && <p className="text-zinc-400 mt-1">{fm.companyName ?? fm.company}</p>}
           <p className="text-zinc-500 text-sm mt-0.5">Report date: {fm.reportDate ?? fm.date}</p>
         </div>
-        {quote && (
+        {displayPrice && (
           <div className="text-right">
-            <p className="text-2xl font-bold">${quote.lastPrice.toFixed(2)}</p>
-            {quote.changePercent != null && (
+            <p className="text-2xl font-bold">${displayPrice.toLocaleString("en-AU", { maximumFractionDigits: 0 })}{isCommodity ? " AUD/oz" : ""}</p>
+            {!isCommodity && quote?.changePercent != null && (
               <p className={`text-sm ${quote.changePercent >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                 {quote.changePercent >= 0 ? "+" : ""}{quote.changePercent.toFixed(2)}% today
               </p>
             )}
+            {isCommodity && <p className="text-xs text-zinc-500 mt-0.5">at report date</p>}
           </div>
         )}
       </div>
 
-      {(fm.intrinsicValueLow || fm.intrinsicValueHigh || mos != null) && (
+      {(ivLow || ivHigh || mos != null) && (
         <div className="grid grid-cols-3 gap-4">
-          {fm.intrinsicValueLow && fm.intrinsicValueHigh && (
+          {ivLow && ivHigh && (
             <Card className="bg-zinc-900 border-zinc-800">
               <CardContent className="pt-4">
-                <p className="text-xs text-zinc-400 uppercase tracking-wide">Intrinsic Value</p>
-                <p className="text-lg font-bold mt-1">${fm.intrinsicValueLow}–${fm.intrinsicValueHigh}</p>
+                <p className="text-xs text-zinc-400 uppercase tracking-wide">
+                  {isCommodity ? "Incentive Price Range" : "Intrinsic Value"}
+                </p>
+                <p className="text-lg font-bold mt-1">
+                  ${ivLow.toLocaleString("en-AU", { maximumFractionDigits: 0 })}–${ivHigh.toLocaleString("en-AU", { maximumFractionDigits: 0 })}
+                </p>
+                {isCommodity && <p className="text-xs text-zinc-500 mt-0.5">AUD per troy oz</p>}
               </CardContent>
             </Card>
           )}
-          {quote && (
+          {displayPrice && (
             <Card className="bg-zinc-900 border-zinc-800">
               <CardContent className="pt-4">
-                <p className="text-xs text-zinc-400 uppercase tracking-wide">Current Price</p>
-                <p className="text-lg font-bold mt-1">${quote.lastPrice.toFixed(2)}</p>
+                <p className="text-xs text-zinc-400 uppercase tracking-wide">
+                  {isCommodity ? "Spot Price" : "Current Price"}
+                </p>
+                <p className="text-lg font-bold mt-1">
+                  ${displayPrice.toLocaleString("en-AU", { maximumFractionDigits: 0 })}
+                </p>
+                {isCommodity && <p className="text-xs text-zinc-500 mt-0.5">AUD per troy oz</p>}
               </CardContent>
             </Card>
           )}

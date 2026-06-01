@@ -151,11 +151,12 @@ export default function MetalsPage() {
   }, 0);
   const totalValue = metalsValue; // shown relative, not absolute — portfolio page handles full total
 
-  // AUD/USD sensitivity — 5% AUD appreciation
+  // AUD/USD sensitivity — 5% AUD appreciation lowers gold's AUD price
   const audSensitivity = prices
     ? (() => {
-        const newAud = prices.audUsd * 1.05;
-        const newGoldAud = prices.goldUsd / newAud;
+        const newAudUsd = prices.audUsd * 1.05;
+        // Re-derive AUD price using the same formula as the server: goldUsd / audUsd
+        const newGoldAud = prices.audUsd > 0 ? prices.goldUsd / newAudUsd : prices.goldAud;
         const goldHoldings = holdings.filter(h => h.metal === "gold");
         const currentGoldValue = goldHoldings.reduce((s, h) => s + h.ounces * prices.goldAud, 0);
         const newGoldValue = goldHoldings.reduce((s, h) => s + h.ounces * newGoldAud, 0);
