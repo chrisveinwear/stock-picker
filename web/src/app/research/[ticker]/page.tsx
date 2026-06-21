@@ -6,6 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import DeleteReportButton from "../DeleteReportButton";
+import PriceRangeChart from "@/components/PriceRangeChart";
 
 export const dynamic = "force-dynamic";
 
@@ -35,10 +37,13 @@ export default async function ReportPage({ params }: { params: Promise<{ ticker:
     try { quote = await getQuote(decodedTicker); } catch {}
   }
 
-  // For commodities use AUD IV fields; for equities use the standard IV fields
-  const ivLow  = isCommodity ? fm.intrinsicValueLowAUD  : fm.intrinsicValueLow;
-  const ivHigh = isCommodity ? fm.intrinsicValueHighAUD : fm.intrinsicValueHigh;
-  const displayPrice = isCommodity ? fm.spotPriceAUD : quote?.lastPrice ?? null;
+  // For commodities: prefer AUD fields, fall back to base-currency fields
+  const ivLow  = isCommodity ? (fm.intrinsicValueLowAUD  ?? fm.intrinsicValueLow)  : fm.intrinsicValueLow;
+  const ivHigh = isCommodity ? (fm.intrinsicValueHighAUD ?? fm.intrinsicValueHigh) : fm.intrinsicValueHigh;
+  const displayPrice = isCommodity
+    ? (fm.spotPriceAUD ?? fm.spotPriceBrent ?? fm.spotPrice ?? null)
+    : (quote?.lastPrice ?? null);
+  const priceUnit = isCommodity ? (fm.unit ?? "AUD/oz") : "";
 
   const mos = ivHigh && displayPrice
     ? ((ivHigh - displayPrice) / ivHigh) * 100
@@ -61,7 +66,7 @@ export default async function ReportPage({ params }: { params: Promise<{ ticker:
         </div>
         {displayPrice && (
           <div className="text-right">
-            <p className="text-2xl font-bold">${displayPrice.toLocaleString("en-AU", { maximumFractionDigits: 0 })}{isCommodity ? " AUD/oz" : ""}</p>
+            <p className="text-2xl font-bold">${displayPrice.toLocaleString("en-AU", { maximumFractionDigits: 0 })}{priceUnit ? ` ${priceUnit}` : ""}</p>
             {!isCommodity && quote?.changePercent != null && (
               <p className={`text-sm ${quote.changePercent >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                 {quote.changePercent >= 0 ? "+" : ""}{quote.changePercent.toFixed(2)}% today
@@ -83,7 +88,7 @@ export default async function ReportPage({ params }: { params: Promise<{ ticker:
                 <p className="text-lg font-bold mt-1">
                   ${ivLow.toLocaleString("en-AU", { maximumFractionDigits: 0 })}–${ivHigh.toLocaleString("en-AU", { maximumFractionDigits: 0 })}
                 </p>
-                {isCommodity && <p className="text-xs text-zinc-500 mt-0.5">AUD per troy oz</p>}
+                {isCommodity && priceUnit && <p className="text-xs text-zinc-500 mt-0.5">{priceUnit}</p>}
               </CardContent>
             </Card>
           )}
@@ -96,7 +101,7 @@ export default async function ReportPage({ params }: { params: Promise<{ ticker:
                 <p className="text-lg font-bold mt-1">
                   ${displayPrice.toLocaleString("en-AU", { maximumFractionDigits: 0 })}
                 </p>
-                {isCommodity && <p className="text-xs text-zinc-500 mt-0.5">AUD per troy oz</p>}
+                {isCommodity && priceUnit && <p className="text-xs text-zinc-500 mt-0.5">{priceUnit}</p>}
               </CardContent>
             </Card>
           )}
@@ -113,6 +118,29 @@ export default async function ReportPage({ params }: { params: Promise<{ ticker:
         </div>
       )}
 
+      {/* Price range chart — shown when the report has per-lens price data */}
+      {fm.priceLenses && Array.isArray(fm.priceLenses) && fm.priceLenses.length > 0 && fm.consensusBuyBelow && fm.consensusSellAbove && (
+        <Card className="bg-zinc-900 border-zinc-800">
+          <CardContent className="pt-5 pb-4">
+            <p className="text-xs text-zinc-400 uppercase tracking-wider mb-4 font-medium">
+              Price Range Analysis — Buy / Hold / Sell Zones by Lens
+            </p>
+            <PriceRangeChart
+              lenses={fm.priceLenses}
+              consensusBuyBelow={fm.consensusBuyBelow}
+              consensusSellAbove={fm.consensusSellAbove}
+              currentPrice={
+                // For USD-denominated commodities, use USD spot price to match the lens scale
+                isCommodity && (fm.unit as string | undefined)?.includes("USD")
+                  ? ((fm.spotPrice ?? fm.spotPriceBrent ?? fm.spotPriceWTI) as number | undefined)
+                  : (displayPrice ?? undefined)
+              }
+              currency={isCommodity ? (fm.unit?.includes("USD") ? "US$" : "$") : "$"}
+            />
+          </CardContent>
+        </Card>
+      )}
+
       {reports.length > 1 && (
         <div className="flex gap-2 text-sm">
           <span className="text-zinc-500">Previous reports:</span>
@@ -126,8 +154,9 @@ export default async function ReportPage({ params }: { params: Promise<{ ticker:
         <MDXRemote source={latest.content} options={{ mdxOptions: { format: "md", remarkPlugins: [remarkGfm] } }} />
       </article>
 
-      <div className="pt-4">
+      <div className="pt-4 flex items-center justify-between">
         <Link href="/research" className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors">← All reports</Link>
+        <DeleteReportButton ticker={decodedTicker} redirectTo="/research" />
       </div>
     </div>
   );

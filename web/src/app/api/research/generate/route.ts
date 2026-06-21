@@ -1,8 +1,7 @@
 /**
- * Research report generation via the local Claude Code CLI.
- * Spawns `claude -p "..."` in the project root so the Buffett skill,
- * reference files and CLAUDE.md are all loaded automatically — no separate
- * API key required. Uses the same Claude account as this Claude Code session.
+ * Research report generation via the Claude Code CLI subprocess.
+ * Requires the CLI to be authenticated — run the one-time login command:
+ *   "/Users/christophermccallum/Library/Application Support/Claude/claude-code/2.1.181/claude.app/Contents/MacOS/claude" login
  */
 import { NextRequest } from "next/server";
 import { spawn } from "child_process";
@@ -13,11 +12,10 @@ import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { researchReports } from "@/db/schema";
 
-export const maxDuration = 300; // 5-minute timeout
+export const maxDuration = 300;
 
-// The claude CLI lives alongside the IDE extension on this machine.
 const CLAUDE_BINARY =
-  "/Users/christophermccallum/.antigravity-ide/extensions/anthropic.claude-code-2.1.156-darwin-arm64/resources/native-binary/claude";
+  "/Users/christophermccallum/Library/Application Support/Claude/claude-code/2.1.181/claude.app/Contents/MacOS/claude";
 
 const PROJECT_ROOT = path.join(process.cwd(), "..");
 
@@ -33,6 +31,45 @@ function buildPrompt(
   const date = today();
   const label = name ? `${ticker} (${name})` : ticker;
 
+  const priceLensesInstruction = `
+The frontmatter MUST include a priceLenses YAML array summarising the buy/hold/sell price targets from each applicable institutional lens in Part B, followed by consensus values. Every number must be a bare numeric value with no currency symbol or units.
+
+priceLenses:
+  - name: "Goldman Sachs"
+    buyBelow: <number>
+    fairValue: <number>
+    sellAbove: <number>
+  - name: "Morgan Stanley DCF"
+    buyBelow: <number>
+    fairValue: <number>
+    sellAbove: <number>
+  - name: "JPMorgan"
+    buyBelow: <number>
+    fairValue: <number>
+    sellAbove: <number>
+  - name: "Citadel Technical"
+    buyBelow: <number>
+    fairValue: <number>
+    sellAbove: <number>
+  - name: "Bridgewater Risk"
+    buyBelow: <number>
+    fairValue: <number>
+    sellAbove: <number>
+  - name: "Bain Competitive"
+    buyBelow: <number>
+    fairValue: <number>
+    sellAbove: <number>
+  - name: "Renaissance Quant"
+    buyBelow: <number>
+    fairValue: <number>
+    sellAbove: <number>
+  - name: "McKinsey Macro"
+    buyBelow: <number>
+    fairValue: <number>
+    sellAbove: <number>
+consensusBuyBelow: <number — weighted consensus of all lens buyBelow values; this is the AI recommended maximum buy price>
+consensusSellAbove: <number — weighted consensus of all lens sellAbove values; this is the AI recommended minimum sell price>`;
+
   if (type === "stock") {
     return `Analyse ASX:${ticker}${name ? ` — ${name}` : ""} as Warren Buffett would.
 
@@ -40,14 +77,45 @@ Generate a comprehensive investment research report following the full analysis 
 
 Today's date: ${date}
 
+${priceLensesInstruction}
+
 Output ONLY the complete markdown report. Do not include any preamble or commentary outside the report itself. After generating the full report, save it to web/reports/${ticker.replace(".AX", "")}/\${date}.md using the Write tool.`;
   }
+
+  const commodityLensesInstruction = `
+The frontmatter MUST include a priceLenses YAML array summarising the buy/hold/sell price targets from each applicable analysis lens, adapted to the commodity context (e.g. Wood Mackenzie cost curve, Goldman supply/demand, etc.), followed by consensus values. Every number must be a bare numeric value with no currency symbol or units. Use the same currency/unit as the rest of the frontmatter (AUD/oz for metals, USD/bbl for oil, etc.).
+
+priceLenses:
+  - name: "Cost Curve"
+    buyBelow: <number>
+    fairValue: <number>
+    sellAbove: <number>
+  - name: "Supply/Demand"
+    buyBelow: <number>
+    fairValue: <number>
+    sellAbove: <number>
+  - name: "Macro Cycle"
+    buyBelow: <number>
+    fairValue: <number>
+    sellAbove: <number>
+  - name: "Technical"
+    buyBelow: <number>
+    fairValue: <number>
+    sellAbove: <number>
+  - name: "Incentive Price"
+    buyBelow: <number>
+    fairValue: <number>
+    sellAbove: <number>
+consensusBuyBelow: <number — weighted consensus buy price>
+consensusSellAbove: <number — weighted consensus sell price>`;
 
   return `Analyse ${label} as a physical ${type} investment.
 
 Generate a comprehensive research report using the commodity analysis framework from COMMODITIES.md. Adapt all 17 sections to the commodity context — replace equity-focused sections with their commodity equivalents (supply/demand, cost curve, incentive price, etc.). Start the output with the YAML frontmatter block (between --- markers) — set intrinsicValueLow/High to the incentive price range.
 
 Today's date: ${date}
+
+${commodityLensesInstruction}
 
 Output ONLY the complete markdown report. Do not include any preamble or commentary outside the report itself. After generating the full report, save it to web/reports/${ticker.replace(/\s+/g, "_").toUpperCase()}/\${date}.md using the Write tool.`;
 }
@@ -77,6 +145,8 @@ function saveReportToDB(ticker: string, filePath: string, content: string) {
         intrinsicValueLow: data.intrinsicValueLow ?? null,
         intrinsicValueHigh: data.intrinsicValueHigh ?? null,
         marginOfSafety: data.marginOfSafety ?? null,
+        buyBelow: data.consensusBuyBelow ?? null,
+        sellAbove: data.consensusSellAbove ?? null,
         filePath,
         generatedBy: "claude-code",
       })
@@ -135,17 +205,15 @@ export async function POST(req: NextRequest) {
         }
       );
 
-      // stream-json emits newline-delimited JSON; extract text tokens as they arrive
       let jsonBuf = "";
       child.stdout.on("data", (chunk: Buffer) => {
         jsonBuf += chunk.toString();
         const lines = jsonBuf.split("\n");
-        jsonBuf = lines.pop() ?? ""; // keep incomplete trailing line
+        jsonBuf = lines.pop() ?? "";
         for (const line of lines) {
           if (!line.trim()) continue;
           try {
             const event = JSON.parse(line);
-            // Assistant text delta
             if (event.type === "assistant") {
               for (const block of event.message?.content ?? []) {
                 if (block.type === "text" && block.text) {
@@ -154,7 +222,6 @@ export async function POST(req: NextRequest) {
                 }
               }
             }
-            // Final result carries the complete text too — use as fallback
             if (event.type === "result" && event.result) {
               if (fullOutput.trim() === "") {
                 fullOutput = event.result;
@@ -168,9 +235,7 @@ export async function POST(req: NextRequest) {
       });
 
       child.stderr.on("data", (chunk: Buffer) => {
-        // Forward stderr as a comment so it's visible but doesn't break parsing
-        const text = chunk.toString();
-        console.error("[claude stderr]", text);
+        console.error("[claude stderr]", chunk.toString());
       });
 
       child.on("error", (err) => {
@@ -181,6 +246,17 @@ export async function POST(req: NextRequest) {
       });
 
       child.on("close", (code) => {
+        // Detect auth failure
+        if (fullOutput.includes("Not logged in") || fullOutput.includes("Please run /login")) {
+          controller.enqueue(
+            encoder.encode(
+              `\n\n__ERROR__:Claude CLI is not authenticated. Run this once in your terminal:\n\n"${CLAUDE_BINARY}" login`
+            )
+          );
+          controller.close();
+          return;
+        }
+
         if (code !== 0 && fullOutput.trim() === "") {
           controller.enqueue(
             encoder.encode(`\n\n__ERROR__:Claude CLI exited with code ${code}`)
@@ -189,27 +265,20 @@ export async function POST(req: NextRequest) {
           return;
         }
 
-        // Try to save the report ourselves as a backup (claude may have already
-        // saved it via the Write tool — if so, this will just overwrite with the same content)
         try {
           const normTicker = asxTicker.replace(".AX", "").replace(/\s+/g, "_");
           const dir = path.join(PROJECT_ROOT, "web", "reports", normTicker);
           fs.mkdirSync(dir, { recursive: true });
           const filePath = path.join(dir, `${today()}.md`);
 
-          // Extract the markdown report:
-          // 1. Strip anything before the first ---
-          // 2. If the CLI wrapped it in a ```markdown code block, unwrap it
           let reportContent = fullOutput;
           const firstDash = fullOutput.indexOf("---");
           if (firstDash !== -1) reportContent = fullOutput.slice(firstDash);
 
-          // Unwrap ```markdown ... ``` wrapper the CLI sometimes adds
           const codeBlockMatch = reportContent.match(/^---\s*\n```(?:markdown)?\n([\s\S]*?)```[\s\S]*$/);
           if (codeBlockMatch) {
             reportContent = codeBlockMatch[1].trim();
           } else {
-            // Strip trailing ``` and any CLI narration after the last ```
             const lastCodeFence = reportContent.lastIndexOf("\n```");
             if (lastCodeFence !== -1 && !reportContent.slice(lastCodeFence + 4).trim().startsWith("\n#")) {
               reportContent = reportContent.slice(0, lastCodeFence).trim();

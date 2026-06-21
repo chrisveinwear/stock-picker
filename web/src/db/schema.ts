@@ -11,6 +11,8 @@ export const researchReports = sqliteTable("research_reports", {
   intrinsicValueLow: real("intrinsic_value_low"),
   intrinsicValueHigh: real("intrinsic_value_high"),
   marginOfSafety: real("margin_of_safety"),     // % at time of report
+  buyBelow: real("buy_below"),                  // AI consensus buy price
+  sellAbove: real("sell_above"),                // AI consensus sell price
   filePath: text("file_path"),                  // relative path to .md file
   generatedBy: text("generated_by").default("claude"),
   createdAt: text("created_at").default(sql`(datetime('now'))`),

@@ -11,12 +11,29 @@ const REPORTS_DIR = path.join(process.cwd(), "reports");
 
 export type ReportFrontmatter = {
   ticker: string;
-  company: string;
-  date: string;
-  verdict: "buy" | "watch" | "avoid" | "hold";
+  company?: string;
+  companyName?: string;
+  date?: string;
+  reportDate?: string;
+  verdict?: "buy" | "watch" | "avoid" | "hold";
   intrinsicValueLow?: number;
   intrinsicValueHigh?: number;
+  intrinsicValueLowAUD?: number;
+  intrinsicValueHighAUD?: number;
   marginOfSafety?: number;
+  // Commodity fields
+  commodity?: string;
+  spotPrice?: number;
+  spotPriceAUD?: number;
+  spotPriceBrent?: number;
+  spotPriceWTI?: number;
+  unit?: string;
+  // Price lens data (populated by newer AI-generated reports)
+  priceLenses?: { name: string; buyBelow: number; fairValue?: number; sellAbove: number }[];
+  consensusBuyBelow?: number;
+  consensusSellAbove?: number;
+  // Allow any other frontmatter fields
+  [key: string]: unknown;
 };
 
 export type Report = {
@@ -38,12 +55,26 @@ export function listReports(): { ticker: string; date: string; filePath: string 
     fs.statSync(path.join(REPORTS_DIR, f)).isDirectory()
   );
 
-  for (const ticker of tickers) {
-    const dir = path.join(REPORTS_DIR, ticker);
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md"));
+  for (const tickerDir of tickers) {
+    const dir = path.join(REPORTS_DIR, tickerDir);
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md")).sort().reverse();
+    if (!files.length) continue;
+
+    // Read ticker from frontmatter of the latest file; fall back to dir name + .AX (stocks)
+    let canonicalTicker: string;
+    try {
+      const raw = fs.readFileSync(path.join(dir, files[0]), "utf-8");
+      const { data } = matter(raw);
+      canonicalTicker = typeof data.ticker === "string" && data.ticker.trim()
+        ? data.ticker.trim()
+        : `${tickerDir}.AX`;
+    } catch {
+      canonicalTicker = `${tickerDir}.AX`;
+    }
+
     for (const file of files) {
       results.push({
-        ticker: `${ticker}.AX`,
+        ticker: canonicalTicker,
         date: file.replace(".md", ""),
         filePath: path.join(dir, file),
       });

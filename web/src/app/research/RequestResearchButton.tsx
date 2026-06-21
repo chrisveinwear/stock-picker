@@ -115,7 +115,7 @@ export default function RequestResearchButton() {
   }
 
   // ── Generating view ──────────────────────────────────────────────────────
-  if (generating || streamText) {
+  if (generating || streamText || error) {
     const isDone = streamText && !generating && !error;
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">

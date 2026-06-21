@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import RequestResearchButton from "./RequestResearchButton";
+import DeleteReportButton from "./DeleteReportButton";
 
 export const dynamic = "force-dynamic";
 
@@ -68,32 +69,35 @@ export default function ResearchPage() {
       ) : (
         <div className="space-y-2">
           {reportsByTicker.map((r) => (
-            <Link key={r.ticker} href={`/research/${encodeURIComponent(r.ticker)}`}>
-              <div className="flex items-center justify-between p-4 rounded-lg border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 transition-colors">
-                <div className="flex items-center gap-4">
-                  <div>
-                    <span className="font-semibold">{r.ticker}</span>
-                    {r.companyName && <span className="text-zinc-400 text-sm ml-2">{r.companyName}</span>}
+            <div key={r.ticker} className="relative group">
+              <Link href={`/research/${encodeURIComponent(r.ticker)}`}>
+                <div className="flex items-center justify-between p-4 rounded-lg border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 transition-colors">
+                  <div className="flex items-center gap-4">
+                    <div>
+                      <span className="font-semibold">{r.ticker}</span>
+                      {r.companyName && <span className="text-zinc-400 text-sm ml-2">{r.companyName}</span>}
+                    </div>
+                    {r.verdict && (
+                      <Badge className={`capitalize text-xs ${verdictStyles[r.verdict] ?? "bg-zinc-700 text-zinc-300"}`}>
+                        {r.verdict}
+                      </Badge>
+                    )}
                   </div>
-                  {r.verdict && (
-                    <Badge className={`capitalize text-xs ${verdictStyles[r.verdict] ?? "bg-zinc-700 text-zinc-300"}`}>
-                      {r.verdict}
-                    </Badge>
-                  )}
+                  <div className="flex items-center gap-6 text-sm text-zinc-400">
+                    {r.intrinsicValueLow && r.intrinsicValueHigh && (
+                      <span>IV ${r.intrinsicValueLow}–${r.intrinsicValueHigh}</span>
+                    )}
+                    {r.marginOfSafety != null && (
+                      <span className={r.marginOfSafety >= 0.3 ? "text-emerald-400" : ""}>
+                        {(r.marginOfSafety * 100).toFixed(0)}% MOS
+                      </span>
+                    )}
+                    {r.reportDate && <span className="text-zinc-500">{r.reportDate}</span>}
+                    <DeleteReportButton ticker={r.ticker} />
+                  </div>
                 </div>
-                <div className="flex items-center gap-6 text-sm text-zinc-400">
-                  {r.intrinsicValueLow && r.intrinsicValueHigh && (
-                    <span>IV ${r.intrinsicValueLow}–${r.intrinsicValueHigh}</span>
-                  )}
-                  {r.marginOfSafety != null && (
-                    <span className={r.marginOfSafety >= 0.3 ? "text-emerald-400" : ""}>
-                      {(r.marginOfSafety * 100).toFixed(0)}% MOS
-                    </span>
-                  )}
-                  {r.reportDate && <span className="text-zinc-500">{r.reportDate}</span>}
-                </div>
-              </div>
-            </Link>
+              </Link>
+            </div>
           ))}
         </div>
       )}
