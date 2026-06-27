@@ -25,6 +25,7 @@ node_modules/
 # Next.js
 web/.next/
 web/data/*.db
+web/data/*.db-*
 web/data/sharesight-tokens.json
 .asx-mcp
 CommSec*.csv
