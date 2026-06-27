@@ -8,11 +8,16 @@ import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import matter from "gray-matter";
-import { and, eq } from "drizzle-orm";
+import { and, eq, gte } from "drizzle-orm";
 import { getDb } from "@/db";
-import { researchReports } from "@/db/schema";
+import { researchReports, alertLog } from "@/db/schema";
 import { fetchRecentNews, formatNewsForPrompt } from "@/lib/news-fetcher";
 import { addReportToWatchlist } from "@/lib/watchlist";
+import {
+  formatHistoryForPrompt,
+  getPreviousReport,
+  detectMaterialChange,
+} from "@/lib/report-history";
 
 export const maxDuration = 300;
 
@@ -46,10 +51,12 @@ function buildPrompt(
   ticker: string,
   type: "stock" | "metal" | "commodity",
   name?: string,
-  newsContext?: string
+  newsContext?: string,
+  historyContext?: string
 ): string {
   const date = today();
   const label = name ? `${ticker} (${name})` : ticker;
+  const historySection = historyContext ?? "";
 
   const priceLensesInstruction = `
 The frontmatter MUST include a priceLenses YAML array summarising the buy/hold/sell price targets from each applicable institutional lens in Part B, followed by consensus values. Every number must be a bare numeric value with no currency symbol or units.
@@ -99,6 +106,7 @@ Generate a comprehensive investment research report following the full analysis 
 
 Today's date: ${date}
 ${newsSection}
+${historySection}
 
 ${priceLensesInstruction}
 
@@ -140,6 +148,7 @@ Generate a comprehensive research report using the commodity analysis framework 
 
 Today's date: ${date}
 ${commodityNewsSection}
+${historySection}
 
 ${commodityLensesInstruction}
 
@@ -172,6 +181,10 @@ function saveReportToDB(ticker: string, filePath: string, content: string) {
     const rawDate = data.reportDate ?? today();
     const reportDate =
       rawDate instanceof Date ? rawDate.toISOString().slice(0, 10) : String(rawDate);
+
+    // Capture the prior report (any date other than this one) BEFORE we write,
+    // so we can detect material changes versus the last published view.
+    const previousReport = getPreviousReport(finalTicker, reportDate);
 
     db.delete(researchReports)
       .where(
@@ -206,6 +219,40 @@ function saveReportToDB(ticker: string, filePath: string, content: string) {
       intrinsicValueHigh: data.intrinsicValueHigh ?? null,
       buyBelow: data.consensusBuyBelow ?? null,
     });
+
+    // Material-change detection: verdict flip or a fair-value move beyond the
+    // threshold versus the previous report. Logged to alert_log so it surfaces
+    // in the app's existing alerts feed (de-duped per ticker/type/day).
+    const changes = detectMaterialChange(previousReport, {
+      verdict: data.verdict ?? null,
+      intrinsicValueLow: data.intrinsicValueLow ?? null,
+      intrinsicValueHigh: data.intrinsicValueHigh ?? null,
+    });
+    for (const change of changes) {
+      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const dupe = db
+        .select({ id: alertLog.id })
+        .from(alertLog)
+        .where(
+          and(
+            eq(alertLog.ticker, finalTicker),
+            eq(alertLog.alertType, change.kind),
+            gte(alertLog.triggeredAt, cutoff)
+          )
+        )
+        .get();
+      if (dupe) continue;
+      db.insert(alertLog)
+        .values({
+          ticker: finalTicker,
+          alertType: change.kind,
+          triggerPrice: change.newFairValue,
+          targetPrice: change.previousFairValue,
+          marginOfSafety: change.changePct,
+        })
+        .run();
+      console.log(`[material-change] ${finalTicker}: ${change.detail}`);
+    }
   } catch (e) {
     console.error("DB save error:", e);
   }
@@ -283,7 +330,8 @@ export async function POST(req: NextRequest) {
 
   const newsResult = await fetchRecentNews(asxTicker, name?.trim());
   const newsContext = formatNewsForPrompt(newsResult);
-  const prompt = buildPrompt(asxTicker, type, name?.trim(), newsContext);
+  const historyContext = formatHistoryForPrompt(asxTicker);
+  const prompt = buildPrompt(asxTicker, type, name?.trim(), newsContext, historyContext);
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({

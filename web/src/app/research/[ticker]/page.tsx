@@ -8,6 +8,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import DeleteReportButton from "../DeleteReportButton";
 import PriceRangeChart from "@/components/PriceRangeChart";
+import FairValueHistoryChart from "@/components/FairValueHistoryChart";
 
 export const dynamic = "force-dynamic";
 
@@ -140,6 +141,20 @@ export default async function ReportPage({ params }: { params: Promise<{ ticker:
           </CardContent>
         </Card>
       )}
+
+      {/* Fair value vs price over time — fills out as monthly refreshes accumulate */}
+      <Card className="bg-zinc-900 border-zinc-800">
+        <CardContent className="pt-5 pb-4">
+          <p className="text-xs text-zinc-400 uppercase tracking-wider mb-4 font-medium">
+            {isCommodity ? "Incentive Price vs Spot — History" : "Price vs Fair Value — History"}
+          </p>
+          <FairValueHistoryChart
+            ticker={fm.ticker ?? decodedTicker}
+            isCommodity={isCommodity}
+            currency={isCommodity ? (fm.unit?.includes("USD") ? "US$" : "$") : "$"}
+          />
+        </CardContent>
+      </Card>
 
       {reports.length > 1 && (
         <div className="flex gap-2 text-sm">

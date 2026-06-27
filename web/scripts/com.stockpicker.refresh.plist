@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.stockpicker.refresh</string>
+
+    <!-- Run via a login shell so node, npx and the Claude CLI are on PATH. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>cd /Users/christophermccallum/Personal-Vibe-Coding/Github/stock-picker/web &amp;&amp; npx tsx scripts/refresh-due.ts</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/christophermccallum/Personal-Vibe-Coding/Github/stock-picker/web</string>
+
+    <!-- Daily at 07:30. launchd runs a missed daily job once after the Mac wakes. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>7</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/christophermccallum/Personal-Vibe-Coding/Github/stock-picker/web/scripts/refresh-due.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/christophermccallum/Personal-Vibe-Coding/Github/stock-picker/web/scripts/refresh-due.log</string>
+</dict>
+</plist>
