@@ -22,7 +22,7 @@ export default function PriceRangeChart({
   consensusBuyBelow,
   consensusSellAbove,
   currentPrice,
-  currency = "$",
+  currency = "AU$",
   mini = false,
 }: Props) {
   const { minVal, range } = useMemo(() => {
@@ -57,29 +57,50 @@ export default function PriceRangeChart({
     const fvPct = consensusFairValue != null ? pct(consensusFairValue) : null;
     return (
       <div className="space-y-1.5">
-        <div className="relative" style={{ height: 28 }}>
-          <div className="absolute inset-0 rounded overflow-hidden flex">
-            <div className="bg-emerald-900/80 h-full" style={{ width: `${pct(consensusBuyBelow)}%` }} />
-            <div className="bg-amber-900/60 h-full" style={{ width: `${pct(consensusSellAbove) - pct(consensusBuyBelow)}%` }} />
-            <div className="bg-red-900/60 h-full flex-1" />
-          </div>
-          {/* Fair value line */}
-          {fvPct != null && (
-            <div
-              className="absolute top-0 bottom-0 w-0.5 bg-amber-400/80 z-10"
-              style={{ left: `${fvPct}%` }}
-            />
-          )}
-          {/* Current price line */}
-          {currentPrice != null && (
-            <div
-              className="absolute top-0 bottom-0 w-0.5 bg-white/90 z-20"
-              style={{ left: `${pct(currentPrice)}%` }}
-            />
-          )}
-          <div className="absolute inset-0 flex items-center justify-between px-1.5 text-[10px] pointer-events-none">
-            <span className="text-emerald-400">&lt;{fmt(consensusBuyBelow)}</span>
-            <span className="text-red-400">&gt;{fmt(consensusSellAbove)}</span>
+        {/* pt reserves space for the two stacked value labels above the bar */}
+        <div className="pt-7">
+          <div className="relative" style={{ height: 28 }}>
+            <div className="absolute inset-0 rounded overflow-hidden flex">
+              <div className="bg-emerald-900/80 h-full" style={{ width: `${pct(consensusBuyBelow)}%` }} />
+              <div className="bg-amber-900/60 h-full" style={{ width: `${pct(consensusSellAbove) - pct(consensusBuyBelow)}%` }} />
+              <div className="bg-red-900/60 h-full flex-1" />
+            </div>
+            {/* Fair value line */}
+            {fvPct != null && (
+              <div
+                className="absolute top-0 bottom-0 w-0.5 bg-amber-400/80 z-10"
+                style={{ left: `${fvPct}%` }}
+              />
+            )}
+            {/* Current price line */}
+            {currentPrice != null && (
+              <div
+                className="absolute top-0 bottom-0 w-0.5 bg-white/90 z-20"
+                style={{ left: `${pct(currentPrice)}%` }}
+              />
+            )}
+            {/* Fair value label — stacked higher to clear the price label */}
+            {fvPct != null && (
+              <span
+                className="absolute bottom-full mb-3.5 -translate-x-1/2 whitespace-nowrap rounded border border-amber-700/60 bg-amber-950/90 px-1 py-px text-[9px] font-medium text-amber-300 z-10"
+                style={{ left: `${fvPct}%` }}
+              >
+                FV {fmt(consensusFairValue!)}
+              </span>
+            )}
+            {/* Current price label — sits just above the bar */}
+            {currentPrice != null && (
+              <span
+                className="absolute bottom-full mb-0.5 -translate-x-1/2 whitespace-nowrap rounded border border-zinc-600/70 bg-zinc-800 px-1 py-px text-[9px] font-medium text-white z-20"
+                style={{ left: `${pct(currentPrice)}%` }}
+              >
+                Now {fmt(currentPrice)}
+              </span>
+            )}
+            <div className="absolute inset-0 flex items-center justify-between px-1.5 text-[10px] pointer-events-none">
+              <span className="text-emerald-400">&lt;{fmt(consensusBuyBelow)}</span>
+              <span className="text-red-400">&gt;{fmt(consensusSellAbove)}</span>
+            </div>
           </div>
         </div>
         {fvPctDiff != null && (

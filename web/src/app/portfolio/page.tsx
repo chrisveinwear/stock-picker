@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import PriceRangeChart, { type LensPrice } from "@/components/PriceRangeChart";
 
 type Holding = {
   id: number;
@@ -19,6 +20,18 @@ type Holding = {
 };
 
 type Quote = { ticker: string; lastPrice: number; changePercent: number | null };
+
+// AI consensus for holdings with a research report completed in the past 3 months.
+type Consensus = {
+  ticker: string;
+  reportDate: string;
+  verdict: string | null;
+  consensusBuyBelow: number;
+  consensusSellAbove: number;
+  lenses: LensPrice[];
+  intrinsicValueLow: number | null;
+  intrinsicValueHigh: number | null;
+};
 
 type MetalHolding = { id: number; metal: string; ounces: number; avgCostAud: number | null; label: string | null; account: string | null };
 type MetalPrices = { goldAud: number; silverAud: number; audUsd: number };
@@ -44,18 +57,22 @@ export default function PortfolioPage() {
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [metals, setMetals] = useState<MetalHolding[]>([]);
   const [metalPrices, setMetalPrices] = useState<MetalPrices | null>(null);
+  const [consensus, setConsensus] = useState<Record<string, Consensus>>({});
 
   async function load() {
-    const [res, metalRes, metalPriceRes] = await Promise.all([
+    const [res, metalRes, metalPriceRes, consensusRes] = await Promise.all([
       fetch("/api/portfolio"),
       fetch("/api/metals"),
       fetch("/api/metals/prices"),
+      fetch("/api/portfolio/consensus"),
     ]);
     const data = await res.json();
     setHoldings(data);
     setMetals(await metalRes.json());
     const mp = await metalPriceRes.json();
     if (!mp.error) setMetalPrices(mp);
+    const cData = await consensusRes.json();
+    if (!cData.error) setConsensus(cData);
 
     const liveHoldings = data.filter((h: Holding) => h.priceType !== "manual");
     if (liveHoldings.length) {
@@ -340,8 +357,10 @@ export default function PortfolioPage() {
                 const pnlPct = pnl != null && cost != null ? (pnl / cost) * 100 : null;
                 const weight = value != null && wtDenom > 0 ? (value / wtDenom) * 100 : null;
                 const isManual = h.priceType === "manual";
+                const con = consensus[h.ticker];
                 return (
-                  <div key={h.id} className="flex items-start justify-between p-4 rounded-lg border border-zinc-800 bg-zinc-900">
+                  <div key={h.id} className="p-4 rounded-lg border border-zinc-800 bg-zinc-900">
+                    <div className="flex items-start justify-between">
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-semibold">{h.ticker}</span>
@@ -388,6 +407,22 @@ export default function PortfolioPage() {
                       {weight != null && <div className="text-right"><p className="text-xs text-zinc-400">Weight</p><p className="font-medium">{weight.toFixed(1)}%</p></div>}
                       <Button variant="ghost" size="sm" onClick={() => handleRemove(h.id)} className="text-zinc-500 hover:text-red-400 h-7 text-xs">Remove</Button>
                     </div>
+                    </div>
+                    {con && (
+                      <div className="mt-3 pt-3 border-t border-zinc-800/60">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-[10px] uppercase tracking-wide text-zinc-500 font-mono">AI Consensus</span>
+                          <span className="text-[10px] text-zinc-600">report {con.reportDate}</span>
+                        </div>
+                        <PriceRangeChart
+                          mini
+                          lenses={con.lenses}
+                          consensusBuyBelow={con.consensusBuyBelow}
+                          consensusSellAbove={con.consensusSellAbove}
+                          currentPrice={price}
+                        />
+                      </div>
+                    )}
                   </div>
                 );
               })}
