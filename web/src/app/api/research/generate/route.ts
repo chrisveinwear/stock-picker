@@ -13,6 +13,7 @@ import { getDb } from "@/db";
 import { researchReports, alertLog } from "@/db/schema";
 import { fetchRecentNews, formatNewsForPrompt } from "@/lib/news-fetcher";
 import { addReportToWatchlist } from "@/lib/watchlist";
+import { getCommodityPriceHistory } from "@/lib/yahoo-finance";
 import {
   formatHistoryForPrompt,
   getPreviousReport,
@@ -47,16 +48,40 @@ function today(): string {
   return new Date().toISOString().split("T")[0];
 }
 
+/**
+ * Live spot price for a physical commodity, as a prompt instruction. Without
+ * this the model anchors on the previous report's stale spot. Returns "" when
+ * the commodity has no Yahoo symbol (the model then falls back to news context).
+ */
+async function fetchCommoditySpot(ticker: string): Promise<string> {
+  try {
+    const [usd, aud] = await Promise.all([
+      getCommodityPriceHistory(ticker, "1mo", "usd"),
+      getCommodityPriceHistory(ticker, "1mo", "aud"),
+    ]);
+    const u = usd[usd.length - 1];
+    const a = aud[aud.length - 1];
+    if (!u) return "";
+    const usdStr = `US$${u.close.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+    const audStr = a ? ` (A$${a.close.toLocaleString("en-AU", { maximumFractionDigits: 0 })})` : "";
+    return `\n\n## Current Spot Price (authoritative)\n\nThe live spot price as of ${u.date} is **${usdStr}${audStr}**. You MUST use this exact figure as the current spot price throughout the report (frontmatter spotPrice/spotPriceAUD and all narrative). Do NOT carry over the spot price from any previous report — the market has moved.`;
+  } catch {
+    return "";
+  }
+}
+
 function buildPrompt(
   ticker: string,
   type: "stock" | "metal" | "commodity",
   name?: string,
   newsContext?: string,
-  historyContext?: string
+  historyContext?: string,
+  spotContext?: string
 ): string {
   const date = today();
   const label = name ? `${ticker} (${name})` : ticker;
   const historySection = historyContext ?? "";
+  const spotSection = spotContext ?? "";
 
   const priceLensesInstruction = `
 The frontmatter MUST include a priceLenses YAML array summarising the buy/hold/sell price targets from each applicable institutional lens in Part B, followed by consensus values. Every number must be a bare numeric value with no currency symbol or units.
@@ -146,7 +171,10 @@ consensusSellAbove: <number — weighted consensus sell price>`;
 
 Generate a comprehensive research report using the commodity analysis framework from COMMODITIES.md. Adapt all 17 sections to the commodity context — replace equity-focused sections with their commodity equivalents (supply/demand, cost curve, incentive price, etc.). Start the output with the YAML frontmatter block (between --- markers) — set intrinsicValueLow/High to the incentive price range.
 
+The frontmatter \`verdict\` MUST be exactly one of these four values (lowercase): buy | watch | hold | avoid. Do NOT invent other labels (no "reduce", "sell", "trim", "accumulate"). Map your conclusion as follows: spot well below the incentive price and attractive to add now → "buy"; below incentive price but not yet compelling, worth monitoring for an entry → "watch"; fairly priced, keep existing exposure but don't add → "hold"; trading at a rich premium to the incentive price / 90th-percentile cost where new capital should stay away and holders may trim → "avoid". Use the same canonical wording in the VERDICT line of the report body.
+
 Today's date: ${date}
+${spotSection}
 ${commodityNewsSection}
 ${historySection}
 
@@ -175,7 +203,10 @@ function saveReportToDB(ticker: string, filePath: string, content: string) {
     }
 
     const db = getDb();
-    const finalTicker = data.ticker ?? ticker;
+    // Always use the caller's canonical ticker (e.g. "GOLD", "CSL.AX"), never the
+    // model's frontmatter ticker — it sometimes drifts (e.g. "XAU"), which would
+    // fragment the DB, watch list, history and material-change detection.
+    const finalTicker = ticker;
     // YAML parses bare ISO dates (reportDate: 2026-06-27) into Date objects,
     // which SQLite can't bind — normalise to a YYYY-MM-DD string.
     const rawDate = data.reportDate ?? today();
@@ -331,7 +362,8 @@ export async function POST(req: NextRequest) {
   const newsResult = await fetchRecentNews(asxTicker, name?.trim());
   const newsContext = formatNewsForPrompt(newsResult);
   const historyContext = formatHistoryForPrompt(asxTicker);
-  const prompt = buildPrompt(asxTicker, type, name?.trim(), newsContext, historyContext);
+  const spotContext = type === "stock" ? "" : await fetchCommoditySpot(asxTicker);
+  const prompt = buildPrompt(asxTicker, type, name?.trim(), newsContext, historyContext, spotContext);
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -432,7 +464,13 @@ export async function POST(req: NextRequest) {
           fs.mkdirSync(dir, { recursive: true });
           const filePath = path.join(dir, `${today()}.md`);
 
-          const reportContent = extractReport(fullOutput);
+          // Force the frontmatter ticker to the canonical one before saving, so
+          // the file, DB row and page heading all agree even if the model drifted
+          // (emitting "XAU" instead of "GOLD") or omitted the ticker entirely.
+          const extracted = extractReport(fullOutput);
+          const reportContent = /^ticker:.*$/m.test(extracted)
+            ? extracted.replace(/^ticker:.*$/m, `ticker: ${asxTicker}`)
+            : extracted.replace(/^---\n/, `---\nticker: ${asxTicker}\n`);
 
           fs.writeFileSync(filePath, reportContent.trim(), "utf-8");
           saveReportToDB(asxTicker, filePath, reportContent);

@@ -63,6 +63,25 @@ async function main() {
   const minAgeDays = arg("min-age") ? Number(arg("min-age")) : undefined;
   const dryRun = hasFlag("dry-run");
 
+  // --ticker=GOLD forces a one-off regeneration of a specific item, bypassing
+  // the staleness rotation (e.g. to fix or refresh a single report on demand).
+  const onlyTicker = arg("ticker");
+  if (onlyTicker) {
+    const type = (arg("type") ?? "stock") as "stock" | "metal" | "commodity";
+    const target: RefreshTarget = {
+      ticker: onlyTicker.toUpperCase(),
+      type,
+      name: arg("name") ?? null,
+      source: [],
+      lastReportDate: null,
+      ageDays: null,
+    };
+    log(`forced refresh of ${target.ticker} (${target.type}) …`);
+    const result = await generate(target);
+    log(result.ok ? `✓ ${target.ticker}: ${result.message}` : `✗ ${target.ticker}: ${result.message}`);
+    return;
+  }
+
   const { targets, total, quota, dueCount } = selectDueTargets({ perDay, minAgeDays });
   log(`tracking ${total} targets · quota ${quota}/day · ${dueCount} due · refreshing ${targets.length}`);
 

@@ -53,18 +53,17 @@ export default function FairValueHistoryChart({ ticker, isCommodity, currency = 
         const series: FvPoint[] = hJson.series ?? [];
         setFv(series);
 
-        // Price history only makes sense for equities (commodities like GOLD
-        // aren't Yahoo tickers). Span the window back to the oldest report.
-        if (!isCommodity) {
-          const period = pickPeriod(series[0]?.date);
-          const pRes = await fetch(
-            `/api/prices/history?ticker=${encodeURIComponent(ticker)}&period=${period}`,
-            { signal: ac.signal }
-          );
-          const pJson = await pRes.json();
-          if (Array.isArray(pJson)) {
-            setPrices(pJson.map((p: PricePoint) => ({ date: p.date, close: p.close })));
-          }
+        // Span the window back to the oldest report. Equities use the Yahoo
+        // ticker; commodities resolve to a futures symbol server-side, with the
+        // series converted to AUD when the report is AUD-denominated.
+        const period = pickPeriod(series[0]?.date);
+        const url = isCommodity
+          ? `/api/prices/commodity-history?commodity=${encodeURIComponent(ticker)}&period=${period}&currency=${currency.includes("US") ? "usd" : "aud"}`
+          : `/api/prices/history?ticker=${encodeURIComponent(ticker)}&period=${period}`;
+        const pRes = await fetch(url, { signal: ac.signal });
+        const pJson = await pRes.json();
+        if (Array.isArray(pJson)) {
+          setPrices(pJson.map((p: PricePoint) => ({ date: p.date, close: p.close })));
         }
       } catch {
         /* aborted or failed — render whatever we have */
@@ -73,7 +72,7 @@ export default function FairValueHistoryChart({ ticker, isCommodity, currency = 
       }
     })();
     return () => ac.abort();
-  }, [ticker, isCommodity]);
+  }, [ticker, isCommodity, currency]);
 
   const fmt = (v: number) =>
     v >= 1000 ? `${currency}${(v / 1000).toFixed(1)}k` : `${currency}${v % 1 === 0 ? v.toFixed(0) : v.toFixed(2)}`;

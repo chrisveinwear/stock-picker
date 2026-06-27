@@ -234,3 +234,67 @@ function getPeriodStart(period: string): Date {
   now.setDate(now.getDate() - (map[period] ?? 365));
   return now;
 }
+
+// Physical commodities → Yahoo Finance futures/spot symbols (all priced in USD).
+const COMMODITY_SYMBOLS: Record<string, string> = {
+  GOLD: "GC=F",      // USD/oz
+  SILVER: "SI=F",    // USD/oz
+  PLATINUM: "PL=F",  // USD/oz
+  PALLADIUM: "PA=F", // USD/oz
+  OIL: "CL=F",       // WTI crude, USD/bbl
+  WTI: "CL=F",
+  BRENT: "BZ=F",     // Brent crude, USD/bbl
+  COPPER: "HG=F",    // USD/lb
+};
+
+/** Raw weekly close series for a Yahoo symbol that must NOT be ".AX"-normalised. */
+async function getRawHistory(symbol: string, period: string): Promise<PriceHistory[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const result: any = await yahooFinance.chart(symbol, {
+    period1: getPeriodStart(period),
+    interval: period === "1mo" || period === "3mo" ? "1d" : "1wk",
+  });
+  return (result.quotes ?? [])
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .filter((q: any) => q.close != null)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((q: any) => ({
+      date: new Date(q.date).toISOString().split("T")[0],
+      close: q.close as number,
+      volume: q.volume ?? 0,
+    }));
+}
+
+/**
+ * Historical spot for a physical commodity. Yahoo quotes these in USD; when
+ * `currency` is "aud" the series is converted per-date using AUDUSD history so
+ * it matches AUD-denominated reports (e.g. gold shown in AUD/oz). Returns [] for
+ * unknown commodities so callers can render without the price line.
+ */
+export async function getCommodityPriceHistory(
+  commodity: string,
+  period: "1mo" | "3mo" | "6mo" | "1y" | "2y" | "5y" = "2y",
+  currency: "usd" | "aud" = "usd"
+): Promise<PriceHistory[]> {
+  const symbol = COMMODITY_SYMBOLS[commodity.trim().toUpperCase()];
+  if (!symbol) return [];
+
+  const usdSeries = await getRawHistory(symbol, period);
+  if (currency === "usd" || usdSeries.length === 0) return usdSeries;
+
+  // Convert USD → AUD using AUDUSD=X history, matching each point to the latest
+  // available FX rate on or before its date.
+  const fx = await getRawHistory("AUDUSD=X", period);
+  if (!fx.length) return usdSeries; // no FX — better to show USD than nothing
+  const fxAsc = [...fx].sort((a, b) => a.date.localeCompare(b.date));
+
+  let i = 0;
+  let lastRate = fxAsc[0].close;
+  return usdSeries.map((p) => {
+    while (i < fxAsc.length && fxAsc[i].date <= p.date) {
+      lastRate = fxAsc[i].close;
+      i++;
+    }
+    return { date: p.date, close: lastRate > 0 ? p.close / lastRate : p.close, volume: p.volume };
+  });
+}

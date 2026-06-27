@@ -30,6 +30,10 @@ npm run refresh:due              # refresh today's due targets
 npx tsx scripts/refresh-due.ts --dry-run     # show what would refresh, do nothing
 npx tsx scripts/refresh-due.ts --per-day=3   # override daily quota
 npx tsx scripts/refresh-due.ts --min-age=30  # override staleness threshold (days)
+
+# Force a one-off regeneration of a specific item (bypasses the rotation)
+npx tsx scripts/refresh-due.ts --ticker=CSL --type=stock --name="CSL Limited"
+npx tsx scripts/refresh-due.ts --ticker=GOLD --type=metal --name="Gold (XAU/USD)"
 ```
 
 What's due is also visible via the API: `GET /api/research/refresh-due?all=1`.
