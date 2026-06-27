@@ -11,6 +11,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",
     "@base-ui/react": "^1.4.1",
+    "@mendable/firecrawl-js": "^4.28.3",
     "@tailwindcss/typography": "^0.5.19",
     "@types/better-sqlite3": "^7.6.13",
     "@visx/axis": "^3.12.0",

@@ -1,159 +1,147 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
 
-type WatchItem = {
-  id: number;
+type ResearchAlert = {
+  watchlistId: number;
   ticker: string;
   companyName: string | null;
-  sector: string | null;
-  intrinsicValue: number | null;
-  targetBuyPrice: number | null;
-  marginOfSafetyThreshold: number | null;
-  whyWatching: string | null;
-  alertEnabled: boolean;
-};
-
-type Quote = {
-  ticker: string;
-  lastPrice: number;
+  buyBelow: number;
+  sellAbove: number;
+  intrinsicValueHigh: number | null;
+  currentPrice: number | null;
   changePercent: number | null;
+  zone: "buy" | "hold" | "sell" | "unknown";
+  isCommodity: boolean;
+  currency: string;
 };
 
-export default function WatchlistPage() {
-  const [items, setItems] = useState<WatchItem[]>([]);
-  const [quotes, setQuotes] = useState<Record<string, Quote>>({});
+const LAST_CHECK_KEY = "alertLastCheckedAt";
+
+export default function ActionAlertsPage() {
+  const [all, setAll] = useState<ResearchAlert[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ ticker: "", companyName: "", intrinsicValue: "", targetBuyPrice: "", whyWatching: "", sector: "" });
+  const [checking, setChecking] = useState(false);
+  const [lastChecked, setLastChecked] = useState<string | null>(null);
 
-  async function load() {
-    const res = await fetch("/api/watchlist");
+  const load = useCallback(async () => {
+    const res = await fetch("/api/research/alerts");
     const data = await res.json();
-    setItems(data);
-    if (data.length) {
-      const tickers = data.map((w: WatchItem) => w.ticker).join(",");
-      const qRes = await fetch(`/api/prices?tickers=${tickers}`);
-      const qData = await qRes.json();
-      setQuotes(Object.fromEntries(qData.map((q: Quote) => [q.ticker, q])));
-    }
+    setAll(Array.isArray(data) ? data : []);
     setLoading(false);
-  }
+  }, []);
 
-  useEffect(() => { load(); }, []);
+  const runCheck = useCallback(async () => {
+    setChecking(true);
+    try {
+      // Refresh live prices/zones and run the backend check (keeps the daily alert log current).
+      await Promise.all([load(), fetch("/api/alerts/check", { method: "POST" })]);
+      const now = new Date().toISOString();
+      localStorage.setItem(LAST_CHECK_KEY, now);
+      setLastChecked(now);
+    } finally {
+      setChecking(false);
+    }
+  }, [load]);
 
-  async function handleAdd(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    await fetch("/api/watchlist", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...form,
-        intrinsicValue: form.intrinsicValue ? parseFloat(form.intrinsicValue) : null,
-        targetBuyPrice: form.targetBuyPrice ? parseFloat(form.targetBuyPrice) : null,
-      }),
-    });
-    setForm({ ticker: "", companyName: "", intrinsicValue: "", targetBuyPrice: "", whyWatching: "", sector: "" });
-    setShowAdd(false);
-    load();
-  }
+  useEffect(() => {
+    const init = async () => {
+      await load();
+      setLastChecked(localStorage.getItem(LAST_CHECK_KEY));
+    };
+    void init();
+  }, [load]);
 
-  async function handleRemove(id: number) {
-    await fetch(`/api/watchlist/${id}`, { method: "DELETE" });
-    load();
-  }
+  const fmtDate = (iso: string | null) =>
+    iso ? new Date(iso).toLocaleString("en-AU", { dateStyle: "short", timeStyle: "short" }) : "—";
+
+  const fmt = (v: number, currency = "AU$") =>
+    `${currency}${v >= 1000 ? (v / 1000).toFixed(1) + "k" : v % 1 === 0 ? v.toFixed(0) : v.toFixed(2)}`;
+
+  // Only watch list items whose live price is currently in the buy or sell zone.
+  const alerts = all.filter((a) => a.zone === "buy" || a.zone === "sell");
 
   return (
-    <div className="space-y-6 max-w-5xl">
+    <div className="space-y-8 max-w-5xl">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Watchlist</h1>
-          <p className="text-zinc-400 text-sm mt-1">Stocks to monitor — alerts when margin of safety threshold is hit</p>
+          <h1 className="text-2xl font-bold">Action Alerts</h1>
+          <p className="text-zinc-400 text-sm mt-1">
+            Watch list stocks whose live price is in the buy or sell zone
+          </p>
         </div>
-        <Button onClick={() => setShowAdd(!showAdd)} variant="outline" className="border-zinc-700 text-zinc-300">
-          {showAdd ? "Cancel" : "+ Add Stock"}
-        </Button>
+        <div className="flex items-center gap-3">
+          {lastChecked && (
+            <span className="text-xs text-zinc-500">Last checked {fmtDate(lastChecked)}</span>
+          )}
+          <Button
+            onClick={runCheck}
+            disabled={checking}
+            variant="outline"
+            className="border-zinc-700 text-zinc-300"
+          >
+            {checking ? "Checking…" : "Check Now"}
+          </Button>
+        </div>
       </div>
 
-      {showAdd && (
-        <Card className="bg-zinc-900 border-zinc-800">
-          <CardHeader><CardTitle className="text-sm">Add to Watchlist</CardTitle></CardHeader>
-          <CardContent>
-            <form onSubmit={handleAdd} className="grid grid-cols-2 md:grid-cols-3 gap-4">
-              {[
-                { key: "ticker", label: "Ticker (e.g. CBA.AX)", required: true },
-                { key: "companyName", label: "Company Name" },
-                { key: "sector", label: "Sector" },
-                { key: "intrinsicValue", label: "Intrinsic Value (AUD)", type: "number" },
-                { key: "targetBuyPrice", label: "Target Buy Price (AUD)", type: "number" },
-                { key: "whyWatching", label: "Why Watching" },
-              ].map((f) => (
-                <div key={f.key} className="space-y-1">
-                  <Label className="text-xs text-zinc-400">{f.label}</Label>
-                  <Input
-                    type={f.type ?? "text"}
-                    step="0.01"
-                    value={(form as Record<string, string>)[f.key]}
-                    onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
-                    required={f.required}
-                    className="bg-zinc-800 border-zinc-700 text-zinc-100 h-8 text-sm"
-                  />
-                </div>
-              ))}
-              <div className="col-span-full">
-                <Button type="submit" className="bg-zinc-700 hover:bg-zinc-600 text-zinc-100">Add to Watchlist</Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-      )}
-
+      {/* Alerts — live, in-zone only */}
       {loading ? (
-        <p className="text-zinc-500 text-sm">Loading...</p>
-      ) : items.length === 0 ? (
-        <p className="text-zinc-500 text-sm">No stocks on watchlist yet.</p>
+        <p className="text-zinc-500 text-sm">Loading…</p>
+      ) : alerts.length === 0 ? (
+        <p className="text-zinc-500 text-sm">
+          No active alerts — all watch list stocks are within thresholds.
+        </p>
       ) : (
         <div className="space-y-2">
-          {items.map((w) => {
-            const q = quotes[w.ticker];
-            const mos = q && w.intrinsicValue ? ((w.intrinsicValue - q.lastPrice) / w.intrinsicValue) * 100 : null;
-            const inBuyZone = q && w.targetBuyPrice && q.lastPrice <= w.targetBuyPrice;
+          {alerts.map((a) => {
+            const isBuy = a.zone === "buy";
+            const price = a.currentPrice ?? 0;
+            const target = isBuy ? a.buyBelow : a.sellAbove;
+            const mos =
+              isBuy && !a.isCommodity && a.intrinsicValueHigh
+                ? (a.intrinsicValueHigh - price) / a.intrinsicValueHigh
+                : null;
             return (
-              <div key={w.id} className={`flex items-center justify-between p-4 rounded-lg border transition-colors ${inBuyZone ? "border-emerald-700 bg-emerald-950/30" : "border-zinc-800 bg-zinc-900"}`}>
+              <div
+                key={`${a.ticker}-${a.zone}`}
+                className={`flex items-center justify-between p-4 rounded-lg border ${
+                  isBuy ? "border-emerald-700 bg-emerald-950/30" : "border-red-900 bg-red-950/20"
+                }`}
+              >
                 <div className="flex items-center gap-4">
+                  <Badge className={isBuy ? "bg-emerald-900 text-emerald-300" : "bg-red-900 text-red-300"}>
+                    {isBuy ? "Buy Zone" : "Sell Zone"}
+                  </Badge>
                   <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold">{w.ticker}</span>
-                      {inBuyZone && <Badge className="bg-emerald-900 text-emerald-300 text-xs">Buy Zone</Badge>}
-                    </div>
-                    {w.companyName && <p className="text-zinc-400 text-xs">{w.companyName}</p>}
-                    {w.whyWatching && <p className="text-zinc-500 text-xs mt-0.5 max-w-xs">{w.whyWatching}</p>}
+                    <p className="font-semibold">{a.ticker}</p>
+                    {a.companyName && <p className="text-xs text-zinc-400">{a.companyName}</p>}
                   </div>
                 </div>
                 <div className="flex items-center gap-6 text-sm">
-                  {q ? (
-                    <div className="text-right">
-                      <p className="font-medium">${q.lastPrice.toFixed(2)}</p>
-                      {q.changePercent != null && (
-                        <p className={`text-xs ${q.changePercent >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                          {q.changePercent >= 0 ? "+" : ""}{q.changePercent.toFixed(2)}%
-                        </p>
-                      )}
-                    </div>
-                  ) : <span className="text-zinc-500 text-xs">—</span>}
-                  {w.intrinsicValue && <div className="text-right"><p className="text-xs text-zinc-400">IV</p><p className="font-medium">${w.intrinsicValue.toFixed(2)}</p></div>}
-                  {w.targetBuyPrice && <div className="text-right"><p className="text-xs text-zinc-400">Target</p><p className="font-medium">${w.targetBuyPrice.toFixed(2)}</p></div>}
+                  <div className="text-right">
+                    <p className="text-xs text-zinc-400">Price</p>
+                    <p className="font-medium">{fmt(price, a.currency)}</p>
+                    {!a.isCommodity && a.changePercent != null && (
+                      <p className={`text-xs ${a.changePercent >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                        {a.changePercent >= 0 ? "+" : ""}{a.changePercent.toFixed(2)}%
+                      </p>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs text-zinc-400">{isBuy ? "Buy Below" : "Sell Above"}</p>
+                    <p className="font-medium">{fmt(target, a.currency)}</p>
+                  </div>
                   {mos != null && (
                     <div className="text-right">
                       <p className="text-xs text-zinc-400">MOS</p>
-                      <p className={`font-medium ${mos >= 30 ? "text-emerald-400" : mos >= 0 ? "text-amber-400" : "text-red-400"}`}>{mos.toFixed(1)}%</p>
+                      <p className={`font-medium ${mos >= 0.3 ? "text-emerald-400" : "text-amber-400"}`}>
+                        {(mos * 100).toFixed(1)}%
+                      </p>
                     </div>
                   )}
-                  <Button variant="ghost" size="sm" onClick={() => handleRemove(w.id)} className="text-zinc-500 hover:text-red-400 h-7 text-xs">Remove</Button>
                 </div>
               </div>
             );

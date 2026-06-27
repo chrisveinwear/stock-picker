@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/db";
-import { researchReports } from "@/db/schema";
+import { researchReports, watchlist } from "@/db/schema";
 import { isNotNull } from "drizzle-orm";
 import { getQuotes } from "@/lib/yahoo-finance";
 import { getLatestReport } from "@/lib/report-store";
@@ -8,6 +8,7 @@ import { getLatestReport } from "@/lib/report-store";
 export const dynamic = "force-dynamic";
 
 export type ResearchAlert = {
+  watchlistId: number;
   ticker: string;
   companyName: string | null;
   verdict: string | null;
@@ -37,8 +38,17 @@ export async function GET() {
 
     if (!rows.length) return NextResponse.json([]);
 
+    // Only surface reports for tickers currently on the watch list. Removing a
+    // stock from the watch list hides its card here (the report itself is kept).
+    const watchIds: Record<string, number> = {};
+    for (const w of db.select({ id: watchlist.id, ticker: watchlist.ticker }).from(watchlist).all()) {
+      watchIds[w.ticker] = w.id;
+    }
+    const watchedRows = rows.filter((r) => r.ticker in watchIds);
+    if (!watchedRows.length) return NextResponse.json([]);
+
     // Only fetch live prices for equity tickers (not commodities like OIL, GOLD)
-    const equityTickers = rows
+    const equityTickers = watchedRows
       .filter((r) => r.ticker.includes("."))
       .map((r) => r.ticker);
 
@@ -50,20 +60,35 @@ export async function GET() {
       }
     }
 
-    const alerts: ResearchAlert[] = rows.map((r) => {
+    const alerts: ResearchAlert[] = watchedRows.map((r) => {
       const report = getLatestReport(r.ticker);
       const fm = report?.frontmatter as Record<string, unknown> | undefined;
       const isCommodity = !!(fm?.commodity);
       const unit = (fm?.unit as string | undefined) ?? "";
-      const currency = unit.includes("USD") ? "US$" : "$";
 
-      // For commodities, use the spot price from the frontmatter as a fallback
-      const commodityPrice = isCommodity
-        ? ((fm?.spotPriceAUD ?? fm?.spotPriceBrent ?? fm?.spotPrice) as number | null | undefined) ?? null
-        : null;
-
+      // Resolve the price and its currency together, so the displayed symbol
+      // always matches the value. ASX equities are AUD; for commodities prefer
+      // an explicit AUD spot price (e.g. gold), otherwise fall back to the
+      // native-unit spot (e.g. Brent in USD).
       const quote = quoteMap[r.ticker];
-      const currentPrice = quote?.lastPrice ?? commodityPrice ?? null;
+      const spotAud = fm?.spotPriceAUD as number | null | undefined;
+      const spotNative = (fm?.spotPriceBrent ?? fm?.spotPrice) as number | null | undefined;
+
+      let currentPrice: number | null;
+      let currency: string;
+      if (quote) {
+        currentPrice = quote.lastPrice;
+        currency = "AU$"; // ASX equity, AUD
+      } else if (isCommodity && spotAud != null) {
+        currentPrice = spotAud;
+        currency = "AU$"; // AUD spot
+      } else if (isCommodity) {
+        currentPrice = spotNative ?? null;
+        currency = unit.includes("USD") ? "US$" : "AU$";
+      } else {
+        currentPrice = null;
+        currency = unit.includes("USD") ? "US$" : "AU$";
+      }
 
       const buyBelow = r.buyBelow!;
       const sellAbove = r.sellAbove!;
@@ -78,6 +103,7 @@ export async function GET() {
           : "hold";
 
       return {
+        watchlistId: watchIds[r.ticker],
         ticker: r.ticker,
         companyName: r.companyName,
         verdict: r.verdict,

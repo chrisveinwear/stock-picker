@@ -3,13 +3,14 @@ import { useEffect, useState, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import PriceRangeChart, { LensPrice } from "@/components/PriceRangeChart";
 import Link from "next/link";
 
 type ResearchAlert = {
+  watchlistId: number;
   ticker: string;
   companyName: string | null;
   verdict: string | null;
@@ -109,7 +110,7 @@ export default function ActionAlertsPage() {
   useEffect(() => {
     loadAlerts();
     loadPicks();
-    const timer = setInterval(loadAlerts, 30_000);
+    const timer = setInterval(() => { loadAlerts(); loadPicks(); }, 5 * 60_000);
     return () => clearInterval(timer);
   }, [loadAlerts, loadPicks]);
 
@@ -129,20 +130,26 @@ export default function ActionAlertsPage() {
     loadPicks();
   }
 
-  const fmt = (v: number, currency = "$") =>
+  async function handleRemoveFromWatchList(watchlistId: number) {
+    // Removes the stock from the watch list and clears its action alerts.
+    // The research report (markdown + history) is kept.
+    await fetch(`/api/watchlist/${watchlistId}`, { method: "DELETE" });
+    await loadAlerts();
+  }
+
+  const fmt = (v: number, currency = "AU$") =>
     `${currency}${v >= 1000 ? (v / 1000).toFixed(1) + "k" : v % 1 === 0 ? v.toFixed(0) : v.toFixed(2)}`;
 
   return (
     <div className="space-y-8 max-w-5xl">
       <div>
-        <h1 className="text-2xl font-bold">Action Alerts</h1>
+        <h1 className="text-2xl font-bold">Watch List</h1>
         <p className="text-zinc-400 text-sm mt-1">Research-based buy/sell zones with live price indicators</p>
       </div>
 
       {/* ── Research-Based Alerts ── */}
       <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider">Research Alerts</h2>
+        <div className="flex items-center justify-end">
           <span className="text-xs text-zinc-500">
             {alertsLoading ? "Loading…" : `${alerts.length} report${alerts.length !== 1 ? "s" : ""} with price zones`}
           </span>
@@ -228,6 +235,25 @@ export default function ActionAlertsPage() {
                       />
                     </div>
                   )}
+
+                  {/* Card actions */}
+                  <div className="flex items-center justify-end gap-2 mt-4 pt-3 border-t border-zinc-800/70">
+                    <Link
+                      href={`/research/${encodeURIComponent(a.ticker)}`}
+                      className={`${buttonVariants({ variant: "outline", size: "sm" })} border-zinc-700 text-zinc-300 h-8 text-xs`}
+                    >
+                      Open Report
+                    </Link>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleRemoveFromWatchList(a.watchlistId)}
+                      title="Remove from watch list and clear its alerts (keeps the research report)"
+                      className="text-zinc-500 hover:text-red-400 h-8 text-xs"
+                    >
+                      Remove
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             ))}
@@ -315,9 +341,9 @@ export default function ActionAlertsPage() {
                       {p.thesis && <p className="text-zinc-400 text-sm max-w-xl">{p.thesis}</p>}
                     </div>
                     <div className="flex items-center gap-5 text-sm shrink-0 ml-4">
-                      {p.entryPrice && <div className="text-right"><p className="text-xs text-zinc-400">Entry</p><p className="font-medium">${p.entryPrice.toFixed(2)}</p></div>}
-                      {q && <div className="text-right"><p className="text-xs text-zinc-400">Now</p><p className="font-medium">${q.lastPrice.toFixed(2)}</p></div>}
-                      {p.targetPrice && <div className="text-right"><p className="text-xs text-zinc-400">IV</p><p className="font-medium">${p.targetPrice.toFixed(2)}</p></div>}
+                      {p.entryPrice && <div className="text-right"><p className="text-xs text-zinc-400">Entry</p><p className="font-medium">AU${p.entryPrice.toFixed(2)}</p></div>}
+                      {q && <div className="text-right"><p className="text-xs text-zinc-400">Now</p><p className="font-medium">AU${q.lastPrice.toFixed(2)}</p></div>}
+                      {p.targetPrice && <div className="text-right"><p className="text-xs text-zinc-400">IV</p><p className="font-medium">AU${p.targetPrice.toFixed(2)}</p></div>}
                       {gainPct != null && (
                         <div className="text-right">
                           <p className="text-xs text-zinc-400">Return</p>

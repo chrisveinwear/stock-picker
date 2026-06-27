@@ -1,12 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/db";
-import { watchlist } from "@/db/schema";
+import { watchlist, researchReports } from "@/db/schema";
 import { desc } from "drizzle-orm";
 
 export async function GET() {
   const db = getDb();
   const items = db.select().from(watchlist).orderBy(desc(watchlist.addedAt)).all();
-  return NextResponse.json(items);
+
+  // Attach the latest AI-consensus buy/sell thresholds per ticker so the UI
+  // reflects the same zones the alert engine uses.
+  const reports = db.select().from(researchReports).orderBy(desc(researchReports.reportDate)).all();
+  const reportMap: Record<string, (typeof reports)[number]> = {};
+  for (const r of reports) {
+    if (!(r.ticker in reportMap)) reportMap[r.ticker] = r;
+  }
+
+  const enriched = items.map((w) => ({
+    ...w,
+    buyBelow: reportMap[w.ticker]?.buyBelow ?? null,
+    sellAbove: reportMap[w.ticker]?.sellAbove ?? null,
+  }));
+  return NextResponse.json(enriched);
 }
 
 export async function POST(req: NextRequest) {

@@ -6,8 +6,8 @@ import { cn } from "@/lib/utils";
 const links = [
   { href: "/", label: "Dashboard", icon: "⬛" },
   { href: "/research", label: "Research", icon: "📋" },
-  { href: "/picks", label: "Action Alerts", icon: "🔔" },
-  { href: "/watchlist", label: "Watchlist", icon: "👁" },
+  { href: "/picks", label: "Watch List", icon: "👁" },
+  { href: "/watchlist", label: "Action Alerts", icon: "🔔" },
   { href: "/portfolio", label: "Portfolio", icon: "💼" },
   { href: "/metals", label: "Metals", icon: "◆" },
 ];

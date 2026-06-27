@@ -11,11 +11,30 @@ import matter from "gray-matter";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { researchReports } from "@/db/schema";
+import { fetchRecentNews, formatNewsForPrompt } from "@/lib/news-fetcher";
+import { addReportToWatchlist } from "@/lib/watchlist";
 
 export const maxDuration = 300;
 
-const CLAUDE_BINARY =
-  "/Users/christophermccallum/Library/Application Support/Claude/claude-code/2.1.181/claude.app/Contents/MacOS/claude";
+function resolveClaudeBinary(): string {
+  // Prefer the symlink on PATH (stays current across updates)
+  const onPath = "/Users/christophermccallum/.local/bin/claude";
+  if (fs.existsSync(onPath)) return onPath;
+
+  // Fall back to the latest versioned bundle under the Claude app directory
+  const base = "/Users/christophermccallum/Library/Application Support/Claude/claude-code";
+  if (fs.existsSync(base)) {
+    const versions = fs.readdirSync(base).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    for (const v of versions.reverse()) {
+      const candidate = `${base}/${v}/claude.app/Contents/MacOS/claude`;
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+
+  return onPath; // will fail gracefully with "not found" error below
+}
+
+const CLAUDE_BINARY = resolveClaudeBinary();
 
 const PROJECT_ROOT = path.join(process.cwd(), "..");
 
@@ -26,7 +45,8 @@ function today(): string {
 function buildPrompt(
   ticker: string,
   type: "stock" | "metal" | "commodity",
-  name?: string
+  name?: string,
+  newsContext?: string
 ): string {
   const date = today();
   const label = name ? `${ticker} (${name})` : ticker;
@@ -70,16 +90,19 @@ priceLenses:
 consensusBuyBelow: <number — weighted consensus of all lens buyBelow values; this is the AI recommended maximum buy price>
 consensusSellAbove: <number — weighted consensus of all lens sellAbove values; this is the AI recommended minimum sell price>`;
 
+  const newsSection = newsContext ? `\n\n## Live Market Context\n\nThe following recent news and ASX announcements were fetched immediately before generating this report. Use them to inform current sentiment, recent events, and any catalyst or risk sections:\n\n${newsContext}` : "";
+
   if (type === "stock") {
     return `Analyse ASX:${ticker}${name ? ` — ${name}` : ""} as Warren Buffett would.
 
 Generate a comprehensive investment research report following the full analysis format in CLAUDE.md. Include all 17 sections (Part A sections 1–8 and Part B sections 9–17). Start the output with the YAML frontmatter block (between --- markers).
 
 Today's date: ${date}
+${newsSection}
 
 ${priceLensesInstruction}
 
-Output ONLY the complete markdown report. Do not include any preamble or commentary outside the report itself. After generating the full report, save it to web/reports/${ticker.replace(".AX", "")}/\${date}.md using the Write tool.`;
+Output ONLY the complete markdown report, beginning directly with the YAML frontmatter block delimited by --- lines. Do NOT wrap the frontmatter or any part of the report in code fences (no \`\`\`yaml or \`\`\`markdown). Do NOT use any tools and do NOT save the file yourself — just print the raw markdown report to stdout. No preamble or commentary outside the report.`;
   }
 
   const commodityLensesInstruction = `
@@ -109,23 +132,46 @@ priceLenses:
 consensusBuyBelow: <number — weighted consensus buy price>
 consensusSellAbove: <number — weighted consensus sell price>`;
 
+  const commodityNewsSection = newsContext ? `\n\n## Live Market Context\n\nThe following recent news and price commentary were fetched immediately before generating this report. Use them to inform current supply/demand dynamics, macro sentiment, and price catalyst sections:\n\n${newsContext}` : "";
+
   return `Analyse ${label} as a physical ${type} investment.
 
 Generate a comprehensive research report using the commodity analysis framework from COMMODITIES.md. Adapt all 17 sections to the commodity context — replace equity-focused sections with their commodity equivalents (supply/demand, cost curve, incentive price, etc.). Start the output with the YAML frontmatter block (between --- markers) — set intrinsicValueLow/High to the incentive price range.
 
 Today's date: ${date}
+${commodityNewsSection}
 
 ${commodityLensesInstruction}
 
-Output ONLY the complete markdown report. Do not include any preamble or commentary outside the report itself. After generating the full report, save it to web/reports/${ticker.replace(/\s+/g, "_").toUpperCase()}/\${date}.md using the Write tool.`;
+Output ONLY the complete markdown report, beginning directly with the YAML frontmatter block delimited by --- lines. Do NOT wrap the frontmatter or any part of the report in code fences (no \`\`\`yaml or \`\`\`markdown). Do NOT use any tools and do NOT save the file yourself — just print the raw markdown report to stdout. No preamble or commentary outside the report.`;
 }
 
 function saveReportToDB(ticker: string, filePath: string, content: string) {
   try {
     const { data } = matter(content);
+
+    // Reject reports whose frontmatter didn't parse into a real report (e.g. the
+    // CLI bailed out mid-generation). Without this, malformed output creates rows
+    // with NULL buy/sell thresholds that silently break the alert engine.
+    const isValid =
+      data &&
+      typeof data === "object" &&
+      data.verdict != null &&
+      (data.intrinsicValueLow != null || data.intrinsicValueHigh != null);
+    if (!isValid) {
+      console.error(
+        `Report frontmatter invalid for ${ticker} — skipping DB save (no verdict/IV found)`
+      );
+      return;
+    }
+
     const db = getDb();
     const finalTicker = data.ticker ?? ticker;
-    const reportDate = data.reportDate ?? today();
+    // YAML parses bare ISO dates (reportDate: 2026-06-27) into Date objects,
+    // which SQLite can't bind — normalise to a YYYY-MM-DD string.
+    const rawDate = data.reportDate ?? today();
+    const reportDate =
+      rawDate instanceof Date ? rawDate.toISOString().slice(0, 10) : String(rawDate);
 
     db.delete(researchReports)
       .where(
@@ -151,9 +197,61 @@ function saveReportToDB(ticker: string, filePath: string, content: string) {
         generatedBy: "claude-code",
       })
       .run();
+
+    // Automatically add the researched stock to the watch list (idempotent).
+    addReportToWatchlist({
+      ticker: finalTicker,
+      companyName: data.companyName ?? data.company ?? null,
+      intrinsicValueLow: data.intrinsicValueLow ?? null,
+      intrinsicValueHigh: data.intrinsicValueHigh ?? null,
+      buyBelow: data.consensusBuyBelow ?? null,
+    });
   } catch (e) {
     console.error("DB save error:", e);
   }
+}
+
+/**
+ * Extract a clean markdown report (frontmatter + body) from the raw CLI output.
+ * Defends against two observed deviations: (1) leading tool-use narration before
+ * the report, and (2) the YAML frontmatter wrapped in a ```yaml code fence with
+ * stray `---` horizontal rules around it. Returns `---\n<yaml>\n---\n\n<body>`.
+ */
+function extractReport(raw: string): string {
+  // Unwrap a fenced frontmatter block (```yaml\n---\n…\n---\n```) → bare ---…---
+  let text = raw.replace(/```ya?ml\s*\n(---\n[\s\S]*?\n---)\s*\n```/, "$1");
+
+  // Anchor on the real frontmatter: the `---` line immediately before `ticker:`.
+  const tickerIdx = text.search(/\nticker:\s/);
+  if (tickerIdx !== -1) {
+    const open = text.lastIndexOf("\n---", tickerIdx);
+    const close = text.indexOf("\n---", tickerIdx);
+    if (open !== -1 && close !== -1 && close > open) {
+      const yaml = text.slice(open + 4, close).trim();
+      let body = text.slice(close + 4);
+      // Drop leading whitespace, an optional stray closing fence, and stray `---` rules.
+      body = body
+        .replace(/^\s*(?:```+\s*)?/, "")
+        .replace(/^(?:---+\s*\n)+/, "")
+        .trimStart();
+      return `---\n${yaml}\n---\n\n${body.trimEnd()}`;
+    }
+  }
+
+  // Fallback: slice from the first `---` and unwrap a whole-report code fence.
+  let reportContent = text;
+  const firstDash = text.indexOf("---");
+  if (firstDash !== -1) reportContent = text.slice(firstDash);
+  const codeBlockMatch = reportContent.match(/^---\s*\n```(?:markdown)?\n([\s\S]*?)```[\s\S]*$/);
+  if (codeBlockMatch) {
+    reportContent = codeBlockMatch[1].trim();
+  } else {
+    const lastCodeFence = reportContent.lastIndexOf("\n```");
+    if (lastCodeFence !== -1 && !reportContent.slice(lastCodeFence + 4).trim().startsWith("\n#")) {
+      reportContent = reportContent.slice(0, lastCodeFence).trim();
+    }
+  }
+  return reportContent.trim();
 }
 
 export async function POST(req: NextRequest) {
@@ -183,7 +281,9 @@ export async function POST(req: NextRequest) {
       ? `${tickerUpper}.AX`
       : tickerUpper;
 
-  const prompt = buildPrompt(asxTicker, type, name?.trim());
+  const newsResult = await fetchRecentNews(asxTicker, name?.trim());
+  const newsContext = formatNewsForPrompt(newsResult);
+  const prompt = buildPrompt(asxTicker, type, name?.trim(), newsContext);
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -257,6 +357,19 @@ export async function POST(req: NextRequest) {
           return;
         }
 
+        // Detect rate/session limit — otherwise the limit message gets saved as a "report"
+        if (/hit your (usage|session) limit|usage limit reached|rate limit/i.test(fullOutput)) {
+          const resetMatch = fullOutput.match(/resets?[^\n]*/i);
+          const resetHint = resetMatch ? ` (${resetMatch[0].trim()})` : "";
+          controller.enqueue(
+            encoder.encode(
+              `\n\n__ERROR__:Claude CLI usage limit reached${resetHint}. Try again after the limit resets.`
+            )
+          );
+          controller.close();
+          return;
+        }
+
         if (code !== 0 && fullOutput.trim() === "") {
           controller.enqueue(
             encoder.encode(`\n\n__ERROR__:Claude CLI exited with code ${code}`)
@@ -271,19 +384,7 @@ export async function POST(req: NextRequest) {
           fs.mkdirSync(dir, { recursive: true });
           const filePath = path.join(dir, `${today()}.md`);
 
-          let reportContent = fullOutput;
-          const firstDash = fullOutput.indexOf("---");
-          if (firstDash !== -1) reportContent = fullOutput.slice(firstDash);
-
-          const codeBlockMatch = reportContent.match(/^---\s*\n```(?:markdown)?\n([\s\S]*?)```[\s\S]*$/);
-          if (codeBlockMatch) {
-            reportContent = codeBlockMatch[1].trim();
-          } else {
-            const lastCodeFence = reportContent.lastIndexOf("\n```");
-            if (lastCodeFence !== -1 && !reportContent.slice(lastCodeFence + 4).trim().startsWith("\n#")) {
-              reportContent = reportContent.slice(0, lastCodeFence).trim();
-            }
-          }
+          const reportContent = extractReport(fullOutput);
 
           fs.writeFileSync(filePath, reportContent.trim(), "utf-8");
           saveReportToDB(asxTicker, filePath, reportContent);
