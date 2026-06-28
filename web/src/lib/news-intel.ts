@@ -293,3 +293,62 @@ export function markNewsSeen(ticker?: string): number {
   const res = ticker ? q.where(eq(newsItems.ticker, ticker)).run() : q.where(eq(newsItems.seen, false)).run();
   return res.changes ?? 0;
 }
+
+export type MaterialAnnouncement = {
+  id: number;
+  ticker: string;
+  companyName: string | null;
+  title: string;
+  url: string | null;
+  publishedAt: string | null;
+  impact: string | null;
+  sentiment: string | null;
+  thesisFlag: boolean;
+  thesisNote: string | null;
+  aiSummary: string | null;
+};
+
+/**
+ * Material announcement alerts: high-impact or thesis-flagged news for held
+ * equities that hasn't been acknowledged (seen). These are the price-sensitive
+ * items (results, guidance, M&A, dividends…) worth surfacing in Action Alerts.
+ */
+export function getMaterialAnnouncements(opts?: { days?: number }): MaterialAnnouncement[] {
+  const db = getDb();
+  const cutoff = isoDaysAgo(opts?.days ?? DIGEST_WINDOW_DAYS);
+  const held = heldEquityTickers();
+  if (!held.length) return [];
+  const nameByTicker = new Map(held.map((h) => [h.ticker, h.companyName]));
+
+  return db
+    .select()
+    .from(newsItems)
+    .where(inArray(newsItems.ticker, held.map((h) => h.ticker)))
+    .orderBy(desc(newsItems.publishedAt))
+    .all()
+    .filter((r) => {
+      if (r.seen) return false;
+      if (r.impact !== "high" && !r.thesisFlag) return false;
+      const iso = r.publishedAt && /^\d{4}-\d{2}-\d{2}/.test(r.publishedAt) ? r.publishedAt : null;
+      return iso ? iso >= cutoff : (r.fetchedAt ?? "") >= cutoff;
+    })
+    .map((r) => ({
+      id: r.id,
+      ticker: r.ticker,
+      companyName: nameByTicker.get(r.ticker) ?? null,
+      title: r.title,
+      url: r.url,
+      publishedAt: r.publishedAt,
+      impact: r.impact,
+      sentiment: r.sentiment,
+      thesisFlag: !!r.thesisFlag,
+      thesisNote: r.thesisNote,
+      aiSummary: r.aiSummary,
+    }));
+}
+
+/** Acknowledge (dismiss) a single announcement alert by news item id. */
+export function dismissNewsItem(id: number): number {
+  const db = getDb();
+  return db.update(newsItems).set({ seen: true }).where(eq(newsItems.id, id)).run().changes ?? 0;
+}
