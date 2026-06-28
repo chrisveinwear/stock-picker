@@ -219,6 +219,8 @@ export default function ActionAlertsPage() {
                       lenses={a.priceLenses}
                       consensusBuyBelow={a.consensusBuyBelow}
                       consensusSellAbove={a.consensusSellAbove}
+                      intrinsicValueLow={a.intrinsicValueLow}
+                      intrinsicValueHigh={a.intrinsicValueHigh}
                       currentPrice={a.currentPrice ?? undefined}
                       currency={a.currency}
                     />
@@ -229,6 +231,8 @@ export default function ActionAlertsPage() {
                         lenses={[]}
                         consensusBuyBelow={a.consensusBuyBelow}
                         consensusSellAbove={a.consensusSellAbove}
+                        intrinsicValueLow={a.intrinsicValueLow}
+                        intrinsicValueHigh={a.intrinsicValueHigh}
                         currentPrice={a.currentPrice ?? undefined}
                         currency={a.currency}
                         mini

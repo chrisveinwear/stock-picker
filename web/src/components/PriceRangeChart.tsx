@@ -15,6 +15,11 @@ type Props = {
   currentPrice?: number | null;
   currency?: string;
   mini?: boolean;
+  // Canonical fair value = intrinsic-value midpoint. When supplied it defines the
+  // "fair value" shown here so the whole app uses one definition; otherwise we
+  // fall back to the average of the per-lens fair values.
+  intrinsicValueLow?: number | null;
+  intrinsicValueHigh?: number | null;
 };
 
 export default function PriceRangeChart({
@@ -24,6 +29,8 @@ export default function PriceRangeChart({
   currentPrice,
   currency = "AU$",
   mini = false,
+  intrinsicValueLow,
+  intrinsicValueHigh,
 }: Props) {
   const { minVal, range } = useMemo(() => {
     const allBuy = [...lenses.map((l) => l.buyBelow), consensusBuyBelow];
@@ -34,12 +41,17 @@ export default function PriceRangeChart({
     return { minVal: lo - pad, maxVal: hi + pad, range: hi - lo + pad * 2 };
   }, [lenses, consensusBuyBelow, consensusSellAbove]);
 
-  // Consensus fair value = average of all lens fairValues
+  // Consensus fair value = intrinsic-value midpoint (single app-wide definition).
+  // Fall back to the average of lens fair values only when IV isn't supplied.
   const consensusFairValue = useMemo(() => {
+    if (intrinsicValueLow != null && intrinsicValueHigh != null)
+      return (intrinsicValueLow + intrinsicValueHigh) / 2;
+    if (intrinsicValueHigh != null) return intrinsicValueHigh;
+    if (intrinsicValueLow != null) return intrinsicValueLow;
     const fvs = lenses.map((l) => l.fairValue).filter((v): v is number => v != null);
     if (!fvs.length) return undefined;
     return fvs.reduce((a, b) => a + b, 0) / fvs.length;
-  }, [lenses]);
+  }, [lenses, intrinsicValueLow, intrinsicValueHigh]);
 
   const pct = (v: number) => Math.max(0, Math.min(100, ((v - minVal) / range) * 100));
 

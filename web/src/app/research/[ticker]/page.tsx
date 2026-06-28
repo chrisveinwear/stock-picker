@@ -130,6 +130,8 @@ export default async function ReportPage({ params }: { params: Promise<{ ticker:
               lenses={fm.priceLenses}
               consensusBuyBelow={fm.consensusBuyBelow}
               consensusSellAbove={fm.consensusSellAbove}
+              intrinsicValueLow={fm.intrinsicValueLow}
+              intrinsicValueHigh={fm.intrinsicValueHigh}
               currentPrice={
                 // For USD-denominated commodities, use USD spot price to match the lens scale
                 isCommodity && (fm.unit as string | undefined)?.includes("USD")

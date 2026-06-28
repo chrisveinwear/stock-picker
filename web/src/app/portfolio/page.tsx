@@ -419,6 +419,8 @@ export default function PortfolioPage() {
                           lenses={con.lenses}
                           consensusBuyBelow={con.consensusBuyBelow}
                           consensusSellAbove={con.consensusSellAbove}
+                          intrinsicValueLow={con.intrinsicValueLow}
+                          intrinsicValueHigh={con.intrinsicValueHigh}
                           currentPrice={price}
                         />
                       </div>
