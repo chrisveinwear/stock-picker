@@ -103,6 +103,102 @@ export async function getQuotes(tickers: string[]): Promise<StockQuote[]> {
     .map((r) => r.value);
 }
 
+// Authoritative fundamentals for a report — richer than the cached StockQuote,
+// including share count, financials and the analyst consensus target (a built-in
+// sanity check against the model's own intrinsic value).
+export type EquityFundamentals = {
+  ticker: string;
+  priceCurrency: string | null;
+  financialCurrency: string | null;
+  price: number | null;
+  previousClose: number | null;
+  marketCap: number | null;
+  sharesOutstanding: number | null;
+  trailingPE: number | null;
+  forwardPE: number | null;
+  priceToBook: number | null;
+  epsTrailing: number | null;
+  epsForward: number | null;
+  dividendYieldPct: number | null;
+  fiftyTwoWeekHigh: number | null;
+  fiftyTwoWeekLow: number | null;
+  beta: number | null;
+  totalRevenue: number | null;
+  ebitda: number | null;
+  grossMarginsPct: number | null;
+  operatingMarginsPct: number | null;
+  profitMarginsPct: number | null;
+  returnOnEquityPct: number | null;
+  totalDebt: number | null;
+  totalCash: number | null;
+  freeCashflow: number | null;
+  debtToEquity: number | null;
+  targetMeanPrice: number | null;
+  targetLowPrice: number | null;
+  targetHighPrice: number | null;
+  numberOfAnalystOpinions: number | null;
+  recommendationKey: string | null;
+};
+
+export async function getEquityFundamentals(
+  ticker: string
+): Promise<EquityFundamentals | null> {
+  const normTicker = normaliseTicker(ticker);
+  try {
+    const [q, s] = await Promise.all([
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      yahooFinance.quote(normTicker) as Promise<any>,
+      yahooFinance
+        .quoteSummary(normTicker, {
+          modules: ["financialData", "defaultKeyStatistics", "summaryDetail"],
+        })
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .catch(() => null) as Promise<any>,
+    ]);
+    if (!q) return null;
+    const fd = s?.financialData ?? {};
+    const ks = s?.defaultKeyStatistics ?? {};
+    const sd = s?.summaryDetail ?? {};
+    const pct = (v: unknown) => (typeof v === "number" ? v * 100 : null);
+
+    return {
+      ticker: normTicker,
+      priceCurrency: q.currency ?? null,
+      financialCurrency: q.financialCurrency ?? null,
+      price: q.regularMarketPrice ?? fd.currentPrice ?? null,
+      previousClose: q.regularMarketPreviousClose ?? null,
+      marketCap: q.marketCap ?? null,
+      sharesOutstanding: q.sharesOutstanding ?? ks.sharesOutstanding ?? null,
+      trailingPE: q.trailingPE ?? sd.trailingPE ?? null,
+      forwardPE: q.forwardPE ?? sd.forwardPE ?? null,
+      priceToBook: q.priceToBook ?? ks.priceToBook ?? null,
+      epsTrailing: q.epsTrailingTwelveMonths ?? ks.trailingEps ?? null,
+      epsForward: q.epsForward ?? ks.forwardEps ?? null,
+      dividendYieldPct: q.dividendYield ?? pct(sd.dividendYield),
+      fiftyTwoWeekHigh: q.fiftyTwoWeekHigh ?? sd.fiftyTwoWeekHigh ?? null,
+      fiftyTwoWeekLow: q.fiftyTwoWeekLow ?? sd.fiftyTwoWeekLow ?? null,
+      beta: sd.beta ?? null,
+      totalRevenue: fd.totalRevenue ?? null,
+      ebitda: fd.ebitda ?? null,
+      grossMarginsPct: pct(fd.grossMargins),
+      operatingMarginsPct: pct(fd.operatingMargins),
+      profitMarginsPct: pct(fd.profitMargins ?? ks.profitMargins),
+      returnOnEquityPct: pct(fd.returnOnEquity),
+      totalDebt: fd.totalDebt ?? null,
+      totalCash: fd.totalCash ?? null,
+      freeCashflow: fd.freeCashflow ?? null,
+      debtToEquity: fd.debtToEquity ?? null,
+      targetMeanPrice: fd.targetMeanPrice ?? null,
+      targetLowPrice: fd.targetLowPrice ?? null,
+      targetHighPrice: fd.targetHighPrice ?? null,
+      numberOfAnalystOpinions: fd.numberOfAnalystOpinions ?? null,
+      recommendationKey: fd.recommendationKey ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Metals spot prices — gold, silver in AUD via Yahoo Finance futures + forex
 // ---------------------------------------------------------------------------

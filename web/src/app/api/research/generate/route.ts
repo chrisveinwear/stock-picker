@@ -13,7 +13,7 @@ import { getDb } from "@/db";
 import { researchReports, alertLog } from "@/db/schema";
 import { fetchRecentNews, formatNewsForPrompt } from "@/lib/news-fetcher";
 import { addReportToWatchlist } from "@/lib/watchlist";
-import { getCommodityPriceHistory } from "@/lib/yahoo-finance";
+import { getCommodityPriceHistory, getEquityFundamentals } from "@/lib/yahoo-finance";
 import {
   formatHistoryForPrompt,
   getPreviousReport,
@@ -70,18 +70,61 @@ async function fetchCommoditySpot(ticker: string): Promise<string> {
   }
 }
 
+/**
+ * Authoritative live fundamentals for an equity, injected into the prompt so the
+ * model never infers price/financials from memory (which produced fabricated
+ * inputs — e.g. valuing Amcor off a hallucinated price and an invented reverse
+ * split). Includes the analyst consensus target as an external sanity check, plus
+ * a reconciliation guard against the model's own intrinsic value.
+ */
+async function fetchEquitySnapshot(ticker: string): Promise<string> {
+  const f = await getEquityFundamentals(ticker);
+  if (!f || f.price == null) return "";
+
+  const cur = f.priceCurrency ?? "AUD";
+  const fcur = f.financialCurrency ?? cur;
+  const n = (v: number | null, d = 2) =>
+    v == null ? "n/a" : v.toLocaleString("en-US", { maximumFractionDigits: d });
+  const bn = (v: number | null) => (v == null ? "n/a" : `${(v / 1e9).toFixed(2)}bn`);
+  const pc = (v: number | null) => (v == null ? "n/a" : `${v.toFixed(1)}%`);
+
+  const lines: string[] = [
+    `- Current price: ${cur} ${n(f.price)} (prev close ${n(f.previousClose)})`,
+    `- Market cap: ${cur} ${bn(f.marketCap)} · Shares outstanding: ${f.sharesOutstanding != null ? `${(f.sharesOutstanding / 1e6).toFixed(1)}m` : "n/a"}`,
+    `- P/E trailing ${n(f.trailingPE, 1)} · P/E forward ${n(f.forwardPE, 1)} · P/B ${n(f.priceToBook, 2)}`,
+    `- EPS trailing ${n(f.epsTrailing)} · EPS forward ${n(f.epsForward)} · Dividend yield ${pc(f.dividendYieldPct)} · Beta ${n(f.beta, 2)}`,
+    `- 52-week range: ${n(f.fiftyTwoWeekLow)} – ${n(f.fiftyTwoWeekHigh)}`,
+    `- Financials (${fcur}): revenue ${bn(f.totalRevenue)} · EBITDA ${bn(f.ebitda)} · FCF ${bn(f.freeCashflow)} · total debt ${bn(f.totalDebt)} · cash ${bn(f.totalCash)}`,
+    `- Margins: gross ${pc(f.grossMarginsPct)} · operating ${pc(f.operatingMarginsPct)} · net ${pc(f.profitMarginsPct)} · ROE ${pc(f.returnOnEquityPct)} · D/E ${n(f.debtToEquity, 1)}`,
+  ];
+  if (f.targetMeanPrice != null) {
+    lines.push(
+      `- Analyst consensus 12m target: ${cur} ${n(f.targetMeanPrice)} (range ${n(f.targetLowPrice)}–${n(f.targetHighPrice)}, ${f.numberOfAnalystOpinions ?? "?"} analysts, rating "${f.recommendationKey ?? "n/a"}")`
+    );
+  }
+
+  return `\n\n## Current Market Data (authoritative — use these exact figures)
+
+These are the live, verified market data and fundamentals for ${ticker}. You MUST anchor the report to them:
+- Use **${cur} ${n(f.price)}** as the current share price everywhere (frontmatter and narrative). Do NOT infer the price, share count, or any corporate action (splits, consolidations) from memory — if you "remember" a different price, it is stale; trust these figures.
+- Note the reporting currency is ${fcur}; convert consistently and state the FX rate used.
+${lines.join("\n")}
+
+Reconciliation guard: after computing your intrinsic value, compare its midpoint to the current price above. If they differ by more than ~40%, STOP and re-examine your inputs and assumptions before finalising — a large gap to a liquid market price (and to the analyst consensus target) is far more often a sign of an input error on your side than a genuine 40%+ mispricing. Explicitly explain any remaining gap. Sanity-check your P/E, EPS and per-share figures against the authoritative numbers above.`;
+}
+
 function buildPrompt(
   ticker: string,
   type: "stock" | "metal" | "commodity",
   name?: string,
   newsContext?: string,
   historyContext?: string,
-  spotContext?: string
+  marketContext?: string
 ): string {
   const date = today();
   const label = name ? `${ticker} (${name})` : ticker;
   const historySection = historyContext ?? "";
-  const spotSection = spotContext ?? "";
+  const marketSection = marketContext ?? "";
 
   const priceLensesInstruction = `
 The frontmatter MUST include a priceLenses YAML array summarising the buy/hold/sell price targets from each applicable institutional lens in Part B, followed by consensus values. Every number must be a bare numeric value with no currency symbol or units.
@@ -120,7 +163,12 @@ priceLenses:
     fairValue: <number>
     sellAbove: <number>
 consensusBuyBelow: <number — weighted consensus of all lens buyBelow values; this is the AI recommended maximum buy price>
-consensusSellAbove: <number — weighted consensus of all lens sellAbove values; this is the AI recommended minimum sell price>`;
+consensusSellAbove: <number — weighted consensus of all lens sellAbove values; this is the AI recommended minimum sell price>
+
+Coherence rules (the thresholds must not contradict your own valuation):
+- consensusBuyBelow MUST be ≤ intrinsicValueLow (you only buy at or below the low end of fair value).
+- consensusSellAbove MUST be ≥ intrinsicValueHigh (never recommend selling below your own fair-value ceiling).
+- For every lens: buyBelow < fairValue < sellAbove.`;
 
   const newsSection = newsContext ? `\n\n## Live Market Context\n\nThe following recent news and ASX announcements were fetched immediately before generating this report. Use them to inform current sentiment, recent events, and any catalyst or risk sections:\n\n${newsContext}` : "";
 
@@ -130,6 +178,7 @@ consensusSellAbove: <number — weighted consensus of all lens sellAbove values;
 Generate a comprehensive investment research report following the full analysis format in CLAUDE.md. Include all 17 sections (Part A sections 1–8 and Part B sections 9–17). Start the output with the YAML frontmatter block (between --- markers).
 
 Today's date: ${date}
+${marketSection}
 ${newsSection}
 ${historySection}
 
@@ -174,7 +223,7 @@ Generate a comprehensive research report using the commodity analysis framework 
 The frontmatter \`verdict\` MUST be exactly one of these four values (lowercase): buy | watch | hold | avoid. Do NOT invent other labels (no "reduce", "sell", "trim", "accumulate"). Map your conclusion as follows: spot well below the incentive price and attractive to add now → "buy"; below incentive price but not yet compelling, worth monitoring for an entry → "watch"; fairly priced, keep existing exposure but don't add → "hold"; trading at a rich premium to the incentive price / 90th-percentile cost where new capital should stay away and holders may trim → "avoid". Use the same canonical wording in the VERDICT line of the report body.
 
 Today's date: ${date}
-${spotSection}
+${marketSection}
 ${commodityNewsSection}
 ${historySection}
 
@@ -226,17 +275,28 @@ function saveReportToDB(ticker: string, filePath: string, content: string) {
       )
       .run();
 
+    // Coherence clamp: never let the sell trigger sit below the fair-value ceiling
+    // or the buy trigger above the floor — an incoherent threshold (e.g. AMC's
+    // sellAbove 31.70 vs IV high 38) fires false sell alerts. Enforce even if the
+    // model ignored the prompt instruction.
+    const ivLow = data.intrinsicValueLow ?? null;
+    const ivHigh = data.intrinsicValueHigh ?? null;
+    let buyBelow: number | null = data.consensusBuyBelow ?? null;
+    let sellAbove: number | null = data.consensusSellAbove ?? null;
+    if (sellAbove != null && ivHigh != null && sellAbove < ivHigh) sellAbove = ivHigh;
+    if (buyBelow != null && ivLow != null && buyBelow > ivLow) buyBelow = ivLow;
+
     db.insert(researchReports)
       .values({
         ticker: finalTicker,
         companyName: data.companyName ?? data.company ?? null,
         reportDate,
         verdict: data.verdict ?? null,
-        intrinsicValueLow: data.intrinsicValueLow ?? null,
-        intrinsicValueHigh: data.intrinsicValueHigh ?? null,
+        intrinsicValueLow: ivLow,
+        intrinsicValueHigh: ivHigh,
         marginOfSafety: data.marginOfSafety ?? null,
-        buyBelow: data.consensusBuyBelow ?? null,
-        sellAbove: data.consensusSellAbove ?? null,
+        buyBelow,
+        sellAbove,
         filePath,
         generatedBy: "claude-code",
       })
@@ -246,9 +306,9 @@ function saveReportToDB(ticker: string, filePath: string, content: string) {
     addReportToWatchlist({
       ticker: finalTicker,
       companyName: data.companyName ?? data.company ?? null,
-      intrinsicValueLow: data.intrinsicValueLow ?? null,
-      intrinsicValueHigh: data.intrinsicValueHigh ?? null,
-      buyBelow: data.consensusBuyBelow ?? null,
+      intrinsicValueLow: ivLow,
+      intrinsicValueHigh: ivHigh,
+      buyBelow,
     });
 
     // Material-change detection: verdict flip or a fair-value move beyond the
@@ -362,8 +422,11 @@ export async function POST(req: NextRequest) {
   const newsResult = await fetchRecentNews(asxTicker, name?.trim());
   const newsContext = formatNewsForPrompt(newsResult);
   const historyContext = formatHistoryForPrompt(asxTicker);
-  const spotContext = type === "stock" ? "" : await fetchCommoditySpot(asxTicker);
-  const prompt = buildPrompt(asxTicker, type, name?.trim(), newsContext, historyContext, spotContext);
+  const marketContext =
+    type === "stock"
+      ? await fetchEquitySnapshot(asxTicker)
+      : await fetchCommoditySpot(asxTicker);
+  const prompt = buildPrompt(asxTicker, type, name?.trim(), newsContext, historyContext, marketContext);
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
