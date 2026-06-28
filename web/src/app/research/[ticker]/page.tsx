@@ -170,9 +170,10 @@ export default async function ReportPage({ params }: { params: Promise<{ ticker:
       {reports.length > 1 && (
         <div className="flex gap-2 text-sm">
           <span className="text-zinc-500">Previous reports:</span>
-          {reports.slice(1).map((r) => (
-            <span key={r.frontmatter.date} className="text-zinc-400">{r.frontmatter.date}</span>
-          ))}
+          {reports.slice(1).map((r, i) => {
+            const d = (r.frontmatter.reportDate ?? r.frontmatter.date) as string | undefined;
+            return <span key={d ?? i} className="text-zinc-400">{d ?? "—"}</span>;
+          })}
         </div>
       )}
 
