@@ -10,6 +10,7 @@ const links = [
   { href: "/watchlist", label: "Action Alerts", icon: "🔔" },
   { href: "/portfolio", label: "Portfolio", icon: "💼" },
   { href: "/metals", label: "Metals", icon: "◆" },
+  { href: "/settings", label: "Settings", icon: "⚙" },
 ];
 
 export default function Nav() {
