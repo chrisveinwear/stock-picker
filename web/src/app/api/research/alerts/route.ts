@@ -38,13 +38,23 @@ export async function GET() {
 
     if (!rows.length) return NextResponse.json([]);
 
+    // Collapse to the latest report per ticker. With monthly refreshes a ticker
+    // accumulates multiple report rows; the alerts view shows one card per ticker
+    // (the most recent), otherwise duplicates render with non-unique React keys.
+    const latestByTicker: Record<string, (typeof rows)[number]> = {};
+    for (const r of rows) {
+      const cur = latestByTicker[r.ticker];
+      if (!cur || r.reportDate > cur.reportDate) latestByTicker[r.ticker] = r;
+    }
+    const latestRows = Object.values(latestByTicker);
+
     // Only surface reports for tickers currently on the watch list. Removing a
     // stock from the watch list hides its card here (the report itself is kept).
     const watchIds: Record<string, number> = {};
     for (const w of db.select({ id: watchlist.id, ticker: watchlist.ticker }).from(watchlist).all()) {
       watchIds[w.ticker] = w.id;
     }
-    const watchedRows = rows.filter((r) => r.ticker in watchIds);
+    const watchedRows = latestRows.filter((r) => r.ticker in watchIds);
     if (!watchedRows.length) return NextResponse.json([]);
 
     // Only fetch live prices for equity tickers (not commodities like OIL, GOLD)
@@ -71,23 +81,26 @@ export async function GET() {
       // an explicit AUD spot price (e.g. gold), otherwise fall back to the
       // native-unit spot (e.g. Brent in USD).
       const quote = quoteMap[r.ticker];
-      const spotAud = fm?.spotPriceAUD as number | null | undefined;
-      const spotNative = (fm?.spotPriceBrent ?? fm?.spotPrice) as number | null | undefined;
+      // buy/sell thresholds are stored in the report's native unit, so the price
+      // we compare against them (and the currency we display) MUST be in that same
+      // unit. Otherwise a USD-quoted commodity (e.g. gold, US$/oz) gets compared
+      // against its AUD spot and lands in the wrong zone.
+      const usdUnit = unit.includes("USD");
+      const nativeSpot = (usdUnit
+        ? (fm?.spotPrice ?? fm?.spotPriceWTI ?? fm?.spotPriceBrent)
+        : (fm?.spotPriceAUD ?? fm?.spotPrice)) as number | null | undefined;
 
       let currentPrice: number | null;
       let currency: string;
       if (quote) {
         currentPrice = quote.lastPrice;
-        currency = "AU$"; // ASX equity, AUD
-      } else if (isCommodity && spotAud != null) {
-        currentPrice = spotAud;
-        currency = "AU$"; // AUD spot
+        currency = "AU$"; // ASX equity — AUD, matching AUD thresholds
       } else if (isCommodity) {
-        currentPrice = spotNative ?? null;
-        currency = unit.includes("USD") ? "US$" : "AU$";
+        currentPrice = nativeSpot ?? null;
+        currency = usdUnit ? "US$" : "AU$";
       } else {
         currentPrice = null;
-        currency = unit.includes("USD") ? "US$" : "AU$";
+        currency = usdUnit ? "US$" : "AU$";
       }
 
       const buyBelow = r.buyBelow!;
