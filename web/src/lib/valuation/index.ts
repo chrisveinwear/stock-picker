@@ -18,6 +18,7 @@ import {
 } from "./dcf";
 
 export type ValuationResult = {
+  kind: "equity";
   modelVersion: string;
   ticker: string;
   runAt: string;
@@ -109,6 +110,7 @@ export async function runEquityValuation(
   const codeIvHigh = Math.max(...methodValues, sens.ivHigh);
 
   return {
+    kind: "equity",
     modelVersion: MODEL_VERSION,
     ticker,
     runAt: new Date().toISOString(),

@@ -15,6 +15,7 @@ import { fetchRecentNews, formatNewsForPrompt } from "@/lib/news-fetcher";
 import { addReportToWatchlist } from "@/lib/watchlist";
 import { getCommodityPriceHistory, getEquityFundamentals } from "@/lib/yahoo-finance";
 import { runEquityValuation, type ValuationResult } from "@/lib/valuation";
+import { runCommodityValuation, type CommodityValuationResult } from "@/lib/valuation/commodity";
 import { describeModelTemplate } from "@/lib/valuation/model-template";
 import { saveValuationSidecar } from "@/lib/valuation/store";
 import {
@@ -153,6 +154,43 @@ REQUIRED — Valuation reconciliation (must be transparent, never hidden):
 2. Compute the divergence of your IV midpoint from (a) this code fair value and (b) the analyst target.
 3. If divergence from the code fair value exceeds ~20%, add a dedicated "**Valuation Reconciliation**" subsection in Part A section 6 that: (a) checks each authoritative input for error/hallucination, (b) identifies which ASSUMPTION(S) — not the model structure — drive the gap, (c) proposes adjusted assumptions with rationale, (d) states the reconciled IV and any residual gap, and (e) notes any model warnings above. Do not change the model STRUCTURE; only argue assumption values.
 4. Your frontmatter intrinsicValueLow/High should be your reconciled view; the code model value is recorded separately by the system.`;
+}
+
+/**
+ * Render the deterministic commodity incentive-price model + a reconciliation
+ * instruction. Commodities are valued on the cost curve (incentive price vs
+ * spot), NOT a DCF — the canonical commodity model structure is fixed; the LLM
+ * may argue the cost-curve assumption VALUES, never the structure.
+ */
+function formatCommodityValuationForPrompt(v: CommodityValuationResult): string {
+  const u = v.currency; // unit, e.g. USD/oz
+  const n = (x: number | null | undefined) => (x == null ? "n/a" : x.toLocaleString("en-US", { maximumFractionDigits: 2 }));
+  const assumptionLines = Object.entries(v.assumptions)
+    .map(([k, t]) => `  - ${k}: ${t.value} [${t.source}${t.note ? `, ${t.note}` : ""}]`)
+    .join("\n");
+  const warnLines = v.warnings.length ? v.warnings.map((w) => `  - ${w}`).join("\n") : "  - none";
+
+  return `\n\n## Independent Valuation Model (deterministic — produced in code)
+
+Canonical commodity model: ${v.modelVersion}
+This is the FIXED commodity valuation structure (cost curve + incentive price) used for every commodity — present your valuation using it and do NOT substitute a DCF or a different structure. You may argue for different cost-curve assumption VALUES, never a different model shape.
+- Fair value = the incentive price (greenfield supply at ~15% IRR; the long-run equilibrium).
+- Decision: buy when spot is below the incentive price; avoid when spot is well above it (oversupply will be incentivised); the 90th-percentile AISC is the cost-curve floor/ceiling.
+
+Code-computed result (the quantitative backbone — use it; do not invent a parallel calculation):
+- Incentive price (fair value): **${n(v.codeFairValue)} ${u}** · value zone ${n(v.codeIvLow)}–${n(v.codeIvHigh)} ${u}
+- Live spot: ${n(v.price)} ${u} (${v.spotVsIncentivePct == null ? "n/a" : (v.spotVsIncentivePct > 0 ? "+" : "") + v.spotVsIncentivePct.toFixed(0) + "% vs incentive"})
+- Cost curve: AISC 50th ${n(v.costCurve.aisc50)} · AISC 90th ${n(v.costCurve.aisc90)} ${u} · thesis ${v.costCurve.thesis}
+- Zones: buy below ${n(v.buyBelow)} · avoid above ${n(v.sellAbove)} ${u} · code verdict zone: ${v.verdictZone}
+- Cost-curve assumptions (source-tagged — these are MAINTAINED estimates, update them if stale):
+${assumptionLines}
+- Model warnings:
+${warnLines}
+
+REQUIRED — Valuation reconciliation (must be transparent, never hidden):
+1. Set your frontmatter intrinsicValueLow/High to your incentive-price range.
+2. Compute the divergence of your incentive-price midpoint from this code incentive price.
+3. If divergence exceeds ~20%, add a dedicated "**Valuation Reconciliation**" subsection that: (a) checks the cost-curve inputs (AISC, incentive price) for staleness/error, (b) identifies which cost-curve ASSUMPTION drives the gap and proposes an updated value with rationale, (c) for a monetary metal trading far above cost, explicitly reconciles the cost view against the monetary/safe-haven demand thesis, (d) states the reconciled incentive price and any residual gap. Do not change the model STRUCTURE; only argue assumption values.`;
 }
 
 function buildPrompt(
@@ -465,18 +503,23 @@ export async function POST(req: NextRequest) {
   const newsContext = formatNewsForPrompt(newsResult);
   const historyContext = formatHistoryForPrompt(asxTicker);
 
-  // Deterministic valuation engine (equities only in Phase 2a). Runs before the
-  // LLM so its computed IV + assumptions are injected as the quantitative backbone
-  // and the LLM must reconcile against it transparently.
-  let valuation: ValuationResult | null = null;
+  // Deterministic valuation engine. Runs before the LLM so its computed IV +
+  // assumptions are injected as the quantitative backbone and the LLM must
+  // reconcile against it transparently. Equity → DCF; commodity → incentive price.
+  let valuation: ValuationResult | CommodityValuationResult | null = null;
   let valuationContext = "";
-  if (type === "stock") {
-    try {
-      valuation = await runEquityValuation(asxTicker);
-      valuationContext = formatValuationForPrompt(valuation);
-    } catch (e) {
-      console.error("[valuation] engine failed:", e);
+  try {
+    if (type === "stock") {
+      const v = await runEquityValuation(asxTicker);
+      valuation = v;
+      valuationContext = formatValuationForPrompt(v);
+    } else {
+      const v = await runCommodityValuation(asxTicker);
+      valuation = v;
+      valuationContext = formatCommodityValuationForPrompt(v);
     }
+  } catch (e) {
+    console.error("[valuation] engine failed:", e);
   }
 
   const marketContext =

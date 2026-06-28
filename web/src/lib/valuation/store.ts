@@ -7,11 +7,15 @@
 import fs from "fs";
 import path from "path";
 import type { ValuationResult } from "./index";
+import type { CommodityValuationResult } from "./commodity";
 
 const REPORTS_DIR = path.join(process.cwd(), "reports");
 
+/** Either valuation kind — discriminated by `kind`. */
+export type ValuationModel = ValuationResult | CommodityValuationResult;
+
 export type ValuationSidecar = {
-  model: ValuationResult;
+  model: ValuationModel;
   llm?: {
     intrinsicValueLow: number | null;
     intrinsicValueHigh: number | null;

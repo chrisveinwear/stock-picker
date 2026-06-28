@@ -3,15 +3,16 @@ import { getDb } from "@/db";
 import { valuationAssumptions } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { DEFAULTS } from "@/lib/valuation/assumptions";
+import { COMMODITY_DEFAULTS } from "@/lib/valuation/commodity";
 
 export const dynamic = "force-dynamic";
 
-/** GET — file defaults + all DB overrides. */
+/** GET — file defaults (equity + commodity) + all DB overrides. */
 export async function GET() {
   try {
     const db = getDb();
     const overrides = db.select().from(valuationAssumptions).all();
-    return NextResponse.json({ defaults: DEFAULTS, overrides });
+    return NextResponse.json({ defaults: DEFAULTS, commodityDefaults: COMMODITY_DEFAULTS, overrides });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
