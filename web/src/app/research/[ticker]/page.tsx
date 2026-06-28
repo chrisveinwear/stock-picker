@@ -9,6 +9,8 @@ import Link from "next/link";
 import DeleteReportButton from "../DeleteReportButton";
 import PriceRangeChart from "@/components/PriceRangeChart";
 import FairValueHistoryChart from "@/components/FairValueHistoryChart";
+import ValuationCard from "@/components/ValuationCard";
+import { readValuationSidecar } from "@/lib/valuation/store";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +30,10 @@ export default async function ReportPage({ params }: { params: Promise<{ ticker:
   if (!latest) notFound();
 
   const fm = latest.frontmatter;
+
+  // Code valuation sidecar (audit/transparency), keyed by the report's file date.
+  const reportDateStr = latest.filePath.match(/(\d{4}-\d{2}-\d{2})\.md$/)?.[1] ?? null;
+  const valuationSidecar = reportDateStr ? readValuationSidecar(decodedTicker, reportDateStr) : null;
 
   // Commodity reports (gold, silver, etc.) use AUD frontmatter fields and spot price —
   // not a live Yahoo Finance equity quote
@@ -143,6 +149,9 @@ export default async function ReportPage({ params }: { params: Promise<{ ticker:
           </CardContent>
         </Card>
       )}
+
+      {/* Code valuation model vs report IV vs analyst — transparency & reconciliation */}
+      {valuationSidecar && <ValuationCard sidecar={valuationSidecar} />}
 
       {/* Fair value vs price over time — fills out as monthly refreshes accumulate */}
       <Card className="bg-zinc-900 border-zinc-800">

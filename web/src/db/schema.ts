@@ -95,14 +95,54 @@ export const metalHoldings = sqliteTable("metal_holdings", {
   updatedAt: text("updated_at").default(sql`(datetime('now'))`),
 });
 
+// Valuation assumption overrides — layered on top of the git-versioned file
+// defaults by the valuation engine's resolver. scope = "global" | a sector name
+// | a ticker; more specific scopes win. File defaults remain the audit baseline.
+export const valuationAssumptions = sqliteTable("valuation_assumptions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  scope: text("scope").notNull(),          // "global" | sector | ticker (e.g. "CSL.AX")
+  key: text("key").notNull(),              // e.g. "riskFreeRate", "terminalGrowth"
+  value: real("value").notNull(),
+  note: text("note"),
+  updatedAt: text("updated_at").default(sql`(datetime('now'))`),
+}, (t) => [uniqueIndex("valuation_assumptions_scope_key").on(t.scope, t.key)]);
+
 // Alert log — history of triggered alerts
 export const alertLog = sqliteTable("alert_log", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   ticker: text("ticker").notNull(),
-  alertType: text("alert_type"),               // "buy_zone" | "sell_zone"
+  alertType: text("alert_type"),               // "buy_zone" | "sell_zone" | "announcement"
   triggerPrice: real("trigger_price"),
   targetPrice: real("target_price"),
   marginOfSafety: real("margin_of_safety"),
   triggeredAt: text("triggered_at").default(sql`(datetime('now'))`),
   dismissed: integer("dismissed", { mode: "boolean" }).default(false),
+});
+
+// News items — deduped per-holding news store powering the dashboard "what moved
+// my holdings" digest. Items accumulate across irregular visits (we never drop
+// unseen news); each is classified by Haiku for sentiment/impact/thesis-relevance.
+export const newsItems = sqliteTable("news_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ticker: text("ticker").notNull(),
+  title: text("title").notNull(),
+  url: text("url"),
+  publishedAt: text("published_at"),            // ISO date (or raw relative string)
+  summary: text("summary"),                     // source snippet
+  sentiment: text("sentiment"),                 // "positive" | "neutral" | "negative"
+  impact: text("impact"),                       // "high" | "medium" | "low"
+  thesisFlag: integer("thesis_flag", { mode: "boolean" }).default(false),
+  thesisNote: text("thesis_note"),              // which assumption it touches, if any
+  aiSummary: text("ai_summary"),                // one-line Haiku take
+  seen: integer("seen", { mode: "boolean" }).default(false),
+  fetchedAt: text("fetched_at").default(sql`(datetime('now'))`),
+}, (t) => [uniqueIndex("news_items_ticker_url").on(t.ticker, t.url)]);
+
+// Per-ticker fetch pointer — drives "fetch everything since the last recorded
+// fetch" so a user who opens the app irregularly never misses news.
+export const newsFetchState = sqliteTable("news_fetch_state", {
+  ticker: text("ticker").primaryKey(),
+  lastFetchedAt: text("last_fetched_at"),       // ISO datetime of last successful fetch
+  lastError: text("last_error"),
+  updatedAt: text("updated_at").default(sql`(datetime('now'))`),
 });

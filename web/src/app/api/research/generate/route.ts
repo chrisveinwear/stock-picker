@@ -14,6 +14,9 @@ import { researchReports, alertLog } from "@/db/schema";
 import { fetchRecentNews, formatNewsForPrompt } from "@/lib/news-fetcher";
 import { addReportToWatchlist } from "@/lib/watchlist";
 import { getCommodityPriceHistory, getEquityFundamentals } from "@/lib/yahoo-finance";
+import { runEquityValuation, type ValuationResult } from "@/lib/valuation";
+import { describeModelTemplate } from "@/lib/valuation/model-template";
+import { saveValuationSidecar } from "@/lib/valuation/store";
 import {
   formatHistoryForPrompt,
   getPreviousReport,
@@ -111,6 +114,45 @@ These are the live, verified market data and fundamentals for ${ticker}. You MUS
 ${lines.join("\n")}
 
 Reconciliation guard: after computing your intrinsic value, compare its midpoint to the current price above. If they differ by more than ~40%, STOP and re-examine your inputs and assumptions before finalising — a large gap to a liquid market price (and to the analyst consensus target) is far more often a sign of an input error on your side than a genuine 40%+ mispricing. Explicitly explain any remaining gap. Sanity-check your P/E, EPS and per-share figures against the authoritative numbers above.`;
+}
+
+/**
+ * Render the deterministic code valuation + canonical model structure + a
+ * mandatory reconciliation instruction. The LLM must present its valuation using
+ * this fixed structure (it may argue assumption VALUES, never the structure), and
+ * must reconcile its IV against this code IV and the analyst target transparently.
+ */
+function formatValuationForPrompt(v: ValuationResult): string {
+  const c = v.currency;
+  const n = (x: number | null | undefined, d = 2) =>
+    x == null ? "n/a" : x.toLocaleString("en-US", { maximumFractionDigits: d });
+  const assumptionLines = Object.entries(v.assumptions)
+    .map(([k, t]) => `  - ${k}: ${t.value} [${t.source}${t.note ? `, ${t.note}` : ""}]`)
+    .join("\n");
+  const warnLines = v.warnings.length
+    ? v.warnings.map((w) => `  - ${w}`).join("\n")
+    : "  - none";
+
+  return `\n\n## Independent Valuation Model (deterministic — produced in code)
+
+${describeModelTemplate()}
+
+Code-computed result (the quantitative backbone — use it; do not invent a parallel arithmetic):
+- Code fair value: **${c} ${n(v.codeFairValue)}** · IV range ${c} ${n(v.codeIvLow)}–${n(v.codeIvHigh)}
+- WACC: ${(v.wacc * 100).toFixed(1)}% · quality tier: ${v.qualityTier} (owner-earnings multiple ${v.ownerEarningsMultiple}x)
+- Method triangulation: DCF ${n(v.methods.dcf)} · owner-earnings-multiple ${n(v.methods.ownerEarningsMultiple)} · Graham ${v.methods.graham == null ? "n/a" : n(v.methods.graham)} · reverse-DCF implied growth ${v.methods.impliedGrowth == null ? "n/a" : (v.methods.impliedGrowth * 100).toFixed(1) + "%"}
+- Normalised earnings base: ${v.baseBasis}
+- Analyst consensus target: ${v.analystTargetMean == null ? "n/a" : c + " " + n(v.analystTargetMean)}
+- Assumptions used (source-tagged):
+${assumptionLines}
+- Model warnings:
+${warnLines}
+
+REQUIRED — Valuation reconciliation (must be transparent, never hidden):
+1. Produce your own intrinsic value via the canonical methods above.
+2. Compute the divergence of your IV midpoint from (a) this code fair value and (b) the analyst target.
+3. If divergence from the code fair value exceeds ~20%, add a dedicated "**Valuation Reconciliation**" subsection in Part A section 6 that: (a) checks each authoritative input for error/hallucination, (b) identifies which ASSUMPTION(S) — not the model structure — drive the gap, (c) proposes adjusted assumptions with rationale, (d) states the reconciled IV and any residual gap, and (e) notes any model warnings above. Do not change the model STRUCTURE; only argue assumption values.
+4. Your frontmatter intrinsicValueLow/High should be your reconciled view; the code model value is recorded separately by the system.`;
 }
 
 function buildPrompt(
@@ -422,10 +464,24 @@ export async function POST(req: NextRequest) {
   const newsResult = await fetchRecentNews(asxTicker, name?.trim());
   const newsContext = formatNewsForPrompt(newsResult);
   const historyContext = formatHistoryForPrompt(asxTicker);
+
+  // Deterministic valuation engine (equities only in Phase 2a). Runs before the
+  // LLM so its computed IV + assumptions are injected as the quantitative backbone
+  // and the LLM must reconcile against it transparently.
+  let valuation: ValuationResult | null = null;
+  let valuationContext = "";
+  if (type === "stock") {
+    try {
+      valuation = await runEquityValuation(asxTicker);
+      valuationContext = formatValuationForPrompt(valuation);
+    } catch (e) {
+      console.error("[valuation] engine failed:", e);
+    }
+  }
+
   const marketContext =
-    type === "stock"
-      ? await fetchEquitySnapshot(asxTicker)
-      : await fetchCommoditySpot(asxTicker);
+    (type === "stock" ? await fetchEquitySnapshot(asxTicker) : await fetchCommoditySpot(asxTicker)) +
+    valuationContext;
   const prompt = buildPrompt(asxTicker, type, name?.trim(), newsContext, historyContext, marketContext);
   const encoder = new TextEncoder();
 
@@ -531,9 +587,47 @@ export async function POST(req: NextRequest) {
           // the file, DB row and page heading all agree even if the model drifted
           // (emitting "XAU" instead of "GOLD") or omitted the ticker entirely.
           const extracted = extractReport(fullOutput);
-          const reportContent = /^ticker:.*$/m.test(extracted)
+          let reportContent = /^ticker:.*$/m.test(extracted)
             ? extracted.replace(/^ticker:.*$/m, `ticker: ${asxTicker}`)
             : extracted.replace(/^---\n/, `---\nticker: ${asxTicker}\n`);
+
+          // Stamp code-authoritative valuation fields into the frontmatter so the
+          // model IV, version and divergence are recorded by the system (not left
+          // to the LLM to copy). Compute divergence vs the LLM's reconciled IV.
+          if (valuation) {
+            const { data: fm } = matter(reportContent);
+            const llmLow = typeof fm.intrinsicValueLow === "number" ? fm.intrinsicValueLow : null;
+            const llmHigh = typeof fm.intrinsicValueHigh === "number" ? fm.intrinsicValueHigh : null;
+            const llmFair = llmLow != null && llmHigh != null ? (llmLow + llmHigh) / 2 : llmHigh ?? llmLow;
+            const divergencePct =
+              llmFair != null && valuation.codeFairValue > 0
+                ? ((llmFair - valuation.codeFairValue) / valuation.codeFairValue) * 100
+                : null;
+
+            const stamp = [
+              `modelVersion: ${valuation.modelVersion}`,
+              `modelIntrinsicValueLow: ${valuation.codeIvLow.toFixed(2)}`,
+              `modelIntrinsicValueHigh: ${valuation.codeIvHigh.toFixed(2)}`,
+              `modelFairValue: ${valuation.codeFairValue.toFixed(2)}`,
+              divergencePct != null ? `valuationDivergencePct: ${divergencePct.toFixed(1)}` : null,
+            ].filter(Boolean).join("\n");
+            // Replace any model* lines the LLM may have emitted, then insert ours.
+            reportContent = reportContent
+              .replace(/^(modelVersion|modelIntrinsicValueLow|modelIntrinsicValueHigh|modelFairValue|valuationDivergencePct):.*$/gm, "")
+              .replace(/\n{3,}/g, "\n\n")
+              .replace(/^ticker: .*$/m, (m) => `${m}\n${stamp}`);
+
+            try {
+              saveValuationSidecar(asxTicker, today(), {
+                model: valuation,
+                llm: { intrinsicValueLow: llmLow, intrinsicValueHigh: llmHigh, fairValue: llmFair },
+                divergencePct,
+                savedAt: new Date().toISOString(),
+              });
+            } catch (e) {
+              console.error("[valuation] sidecar save failed:", e);
+            }
+          }
 
           fs.writeFileSync(filePath, reportContent.trim(), "utf-8");
           saveReportToDB(asxTicker, filePath, reportContent);

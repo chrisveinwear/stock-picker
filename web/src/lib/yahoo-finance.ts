@@ -140,6 +140,76 @@ export type EquityFundamentals = {
   recommendationKey: string | null;
 };
 
+// One annual fiscal-year row of statement data needed for a DCF. Sourced from
+// fundamentalsTimeSeries (the legacy *StatementHistory modules are deprecated).
+export type FinancialYear = {
+  date: string;
+  totalRevenue: number | null;
+  operatingIncome: number | null;
+  ebit: number | null;
+  ebitda: number | null;
+  depreciationAndAmortization: number | null;
+  interestExpense: number | null;
+  taxProvision: number | null;
+  pretaxIncome: number | null;
+  netIncome: number | null;
+  operatingCashFlow: number | null;
+  capitalExpenditure: number | null; // negative as reported
+  freeCashFlow: number | null;
+  totalDebt: number | null;
+  cashAndCashEquivalents: number | null;
+  stockholdersEquity: number | null;
+  ordinarySharesNumber: number | null;
+};
+
+export async function getFinancialTimeSeries(
+  ticker: string,
+  years = 6
+): Promise<FinancialYear[]> {
+  const normTicker = normaliseTicker(ticker);
+  const period1 = new Date();
+  period1.setFullYear(period1.getFullYear() - years);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows: any = await yahooFinance.fundamentalsTimeSeries(normTicker, {
+    period1,
+    type: "annual",
+    module: "all",
+  });
+  const arr = Array.isArray(rows) ? rows : [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return arr.map((r: any) => ({
+    date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date ?? ""),
+    totalRevenue: r.totalRevenue ?? null,
+    operatingIncome: r.operatingIncome ?? null,
+    ebit: r.EBIT ?? null,
+    ebitda: r.EBITDA ?? r.normalizedEBITDA ?? null,
+    depreciationAndAmortization: r.depreciationAndAmortization ?? r.reconciledDepreciation ?? null,
+    interestExpense: r.interestExpense ?? null,
+    taxProvision: r.taxProvision ?? null,
+    pretaxIncome: r.pretaxIncome ?? null,
+    netIncome: r.netIncome ?? null,
+    operatingCashFlow: r.operatingCashFlow ?? null,
+    capitalExpenditure: r.capitalExpenditure ?? null,
+    freeCashFlow: r.freeCashFlow ?? null,
+    totalDebt: r.totalDebt ?? null,
+    cashAndCashEquivalents: r.cashAndCashEquivalents ?? null,
+    stockholdersEquity: r.stockholdersEquity ?? r.commonStockEquity ?? null,
+    ordinarySharesNumber: r.ordinarySharesNumber ?? null,
+  }));
+}
+
+/** Spot FX rate as price of 1 unit of `base` in `quote` (e.g. AUDUSD ~0.65). */
+export async function getFxRate(base: string, quote: string): Promise<number | null> {
+  if (base === quote) return 1;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const q: any = await yahooFinance.quote(`${base}${quote}=X`);
+    return q?.regularMarketPrice ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function getEquityFundamentals(
   ticker: string
 ): Promise<EquityFundamentals | null> {
