@@ -30,3 +30,6 @@ web/data/sharesight-tokens.json
 .asx-mcp
 CommSec*.csv
 *.csv
+
+# launchd refresh run log
+web/scripts/*.log
