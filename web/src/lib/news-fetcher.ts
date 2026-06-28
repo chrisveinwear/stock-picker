@@ -11,9 +11,9 @@
 import yahooFinance from "yahoo-finance2";
 
 // Env-only — never hardcode the key (this file is in a public repo). Set
-// FIRECRAWL_API_KEY in web/.env.local. When unset, the Firecrawl path is
-// skipped and we fall back to Yahoo Finance.
-const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
+// FIRECRAWL_API_KEY in web/.env.local. Read lazily inside the fetch (not at
+// module load) so standalone scripts that load .env after import still see it.
+// When unset, the Firecrawl path is skipped and we fall back to Yahoo Finance.
 const FIRECRAWL_BASE = "https://api.firecrawl.dev/v2";
 
 export type NewsItem = {
@@ -51,14 +51,15 @@ function normaliseDate(raw?: string): string | undefined {
 }
 
 async function fetchViaFirecrawl(query: string, limit = 8): Promise<NewsItem[]> {
-  if (!FIRECRAWL_API_KEY) {
+  const apiKey = process.env.FIRECRAWL_API_KEY;
+  if (!apiKey) {
     throw new Error("FIRECRAWL_API_KEY not set");
   }
 
   const res = await fetch(`${FIRECRAWL_BASE}/search`, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${FIRECRAWL_API_KEY}`,
+      "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({

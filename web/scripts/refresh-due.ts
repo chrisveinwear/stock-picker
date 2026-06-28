@@ -19,6 +19,7 @@
  *   --dry-run        print what would be refreshed, generate nothing
  *   --no-commit      generate reports but don't commit/push them
  */
+import "@/lib/load-env"; // FIRST — loads .env.local so FIRECRAWL_API_KEY etc. are set
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { selectDueTargets, type RefreshTarget } from "@/lib/refresh-queue";

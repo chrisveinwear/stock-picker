@@ -4,6 +4,7 @@ import { desc, eq } from "drizzle-orm";
 import { getQuotes, getMetalPrices } from "@/lib/yahoo-finance";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import NewsDigestPanel from "@/components/NewsDigestPanel";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
@@ -360,6 +361,9 @@ export default async function DashboardPage() {
 
         </div>
       </div>
+
+      {/* ── Portfolio News Digest ────────────────────────────────────────── */}
+      <NewsDigestPanel />
 
       {/* ── Research & Recent Watchlist ──────────────────────────────────── */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
