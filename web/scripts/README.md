@@ -21,6 +21,11 @@ automatically, with no running dev server required.
   new report is aware of how its verdict / fair value / margin of safety have
   drifted. After generating, a **material change** (verdict flip, or fair value
   move ≥ 10%) is logged to `alert_log` and surfaces in the app's alerts feed.
+- **Auto-commit** (`scripts/refresh-due.ts`) — after a successful run the new
+  report files are committed (scoped to `web/reports/`, so nothing else in the
+  working tree is swept in) and pushed. A non-fast-forward push is retried once
+  after an `--autostash` rebase; push failures are logged, not fatal. The DB is
+  gitignored, so only the markdown reports are committed. Disable with `--no-commit`.
 
 ## Run it manually
 
@@ -28,6 +33,7 @@ automatically, with no running dev server required.
 cd web
 npm run refresh:due              # refresh today's due targets
 npx tsx scripts/refresh-due.ts --dry-run     # show what would refresh, do nothing
+npx tsx scripts/refresh-due.ts --no-commit   # generate but don't commit/push
 npx tsx scripts/refresh-due.ts --per-day=3   # override daily quota
 npx tsx scripts/refresh-due.ts --min-age=30  # override staleness threshold (days)
 

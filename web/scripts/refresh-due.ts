@@ -9,11 +9,18 @@
  * Run from the web/ directory (so data/ and reports/ resolve):
  *   npx tsx scripts/refresh-due.ts
  *
+ * After a successful run it commits the new report files (scoped to web/reports/)
+ * and pushes them, so the version-controlled report history stays captured with
+ * no manual step. The DB is gitignored, so only the markdown reports are committed.
+ *
  * Flags:
  *   --per-day=N      override how many to refresh this run (default ceil(N/28))
  *   --min-age=N      override staleness threshold in days (default 25)
  *   --dry-run        print what would be refreshed, generate nothing
+ *   --no-commit      generate reports but don't commit/push them
  */
+import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { selectDueTargets, type RefreshTarget } from "@/lib/refresh-queue";
 import { POST } from "@/app/api/research/generate/route";
 
@@ -25,6 +32,49 @@ const hasFlag = (name: string) => process.argv.includes(`--${name}`);
 
 function log(...parts: unknown[]) {
   console.log(`[refresh-due ${new Date().toISOString()}]`, ...parts);
+}
+
+function git(root: string, args: string[]): { code: number; out: string } {
+  const r = spawnSync("git", ["-C", root, ...args], { encoding: "utf-8" });
+  return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim() };
+}
+
+/**
+ * Commit and push the report files produced this run. Scoped to web/reports/ so
+ * unrelated working-tree changes (or the gitignored DB) are never swept in. Push
+ * failures are logged, not fatal — and a non-fast-forward is retried after an
+ * autostash rebase so a concurrent push doesn't block the daily commit.
+ */
+function commitAndPushReports(tickers: string[]): void {
+  if (!tickers.length) return;
+  const root = path.resolve(process.cwd(), ".."); // cwd is web/, repo root is its parent
+
+  git(root, ["add", "web/reports"]);
+  if (git(root, ["diff", "--cached", "--quiet"]).code === 0) {
+    log("auto-commit: no new report files to commit.");
+    return;
+  }
+
+  const date = new Date().toISOString().slice(0, 10);
+  const msg = `Auto-refresh research reports (${tickers.join(", ")}) — ${date}`;
+  const commit = git(root, ["commit", "-m", msg]);
+  if (commit.code !== 0) {
+    log(`auto-commit failed: ${commit.out}`);
+    return;
+  }
+  log(`auto-committed ${tickers.length} report(s): ${tickers.join(", ")}`);
+
+  let push = git(root, ["push"]);
+  if (push.code !== 0) {
+    log(`push failed, retrying after rebase: ${push.out}`);
+    const rebase = git(root, ["pull", "--rebase", "--autostash"]);
+    if (rebase.code !== 0) {
+      log(`auto-push aborted (rebase failed): ${rebase.out}`);
+      return;
+    }
+    push = git(root, ["push"]);
+  }
+  log(push.code === 0 ? "auto-pushed reports to remote." : `auto-push failed: ${push.out}`);
 }
 
 async function generate(target: RefreshTarget): Promise<{ ok: boolean; message: string }> {
@@ -62,6 +112,8 @@ async function main() {
   const perDay = arg("per-day") ? Number(arg("per-day")) : undefined;
   const minAgeDays = arg("min-age") ? Number(arg("min-age")) : undefined;
   const dryRun = hasFlag("dry-run");
+  const noCommit = hasFlag("no-commit");
+  const refreshed: string[] = []; // tickers whose reports succeeded this run
 
   // --ticker=GOLD forces a one-off regeneration of a specific item, bypassing
   // the staleness rotation (e.g. to fix or refresh a single report on demand).
@@ -79,6 +131,8 @@ async function main() {
     log(`forced refresh of ${target.ticker} (${target.type}) …`);
     const result = await generate(target);
     log(result.ok ? `✓ ${target.ticker}: ${result.message}` : `✗ ${target.ticker}: ${result.message}`);
+    if (result.ok) refreshed.push(target.ticker);
+    if (!noCommit) commitAndPushReports(refreshed);
     return;
   }
 
@@ -100,6 +154,7 @@ async function main() {
     try {
       const result = await generate(t);
       log(result.ok ? `✓ ${t.ticker}: ${result.message}` : `✗ ${t.ticker}: ${result.message}`);
+      if (result.ok) refreshed.push(t.ticker);
       // If we hit the CLI usage limit, stop — the rest will be retried tomorrow.
       if (!result.ok && /usage limit|rate limit|not authenticated/i.test(result.message)) {
         log("stopping early — CLI unavailable; remaining targets will roll to the next run.");
@@ -109,6 +164,9 @@ async function main() {
       log(`✗ ${t.ticker}: threw ${e}`);
     }
   }
+
+  // Commit whatever succeeded — even on an early stop, so partial progress is saved.
+  if (!noCommit) commitAndPushReports(refreshed);
 
   log("done.");
 }
