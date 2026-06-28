@@ -2,20 +2,21 @@
  * Portfolio news intelligence — the "what moved my holdings" digest.
  *
  * Per holding we fetch news since the last recorded fetch (gap-proof for users
- * who open the app irregularly), dedupe by URL, classify each item with Haiku
- * (sentiment / impact / thesis-relevance), and persist to news_items. The
- * dashboard reads the cached classification — no live fetch on page load.
+ * who open the app irregularly), dedupe by URL, then classify ALL new items
+ * across every holding in ONE Claude CLI call (sentiment / impact / thesis),
+ * and persist to news_items. The dashboard reads the cached classification — no
+ * live fetch on page load.
  */
 import { desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import { newsItems, newsFetchState, portfolioHoldings, researchReports, stockPicks } from "@/db/schema";
 import { fetchRecentNews } from "@/lib/news-fetcher";
-import { classifyNewsBatch, type NewsClassification } from "@/lib/ai/haiku";
+import { classifyNews, classifierAvailable, type ClassifyInput, type NewsClassification } from "@/lib/ai/classifier";
 
 // First run / long absence: never look back further than this.
 const MAX_LOOKBACK_DAYS = 30;
-// Dashboard shows news from roughly the last few weeks.
-const DIGEST_WINDOW_DAYS = 21;
+// Dashboard window — match the lookback so nothing we fetch is hidden.
+const DIGEST_WINDOW_DAYS = 30;
 
 function isoDaysAgo(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString();
@@ -58,102 +59,132 @@ function getThesisContext(ticker: string): string {
   if (report?.verdict) {
     const iv =
       report.intrinsicValueLow != null && report.intrinsicValueHigh != null
-        ? `, intrinsic value ${report.intrinsicValueLow}–${report.intrinsicValueHigh}`
+        ? `, IV ${report.intrinsicValueLow}–${report.intrinsicValueHigh}`
         : "";
-    parts.push(`Latest verdict: ${report.verdict.toUpperCase()}${iv} (as of ${report.reportDate}).`);
+    parts.push(`verdict ${report.verdict.toUpperCase()}${iv} (${report.reportDate})`);
   }
-  if (pick?.thesis) parts.push(`Thesis: ${pick.thesis}`);
-  if (pick?.moatType) parts.push(`Moat: ${pick.moatType}.`);
-  return parts.join(" ");
+  if (pick?.thesis) parts.push(pick.thesis);
+  if (pick?.moatType) parts.push(`moat: ${pick.moatType}`);
+  return parts.join("; ");
 }
 
 export type RefreshResult = { ticker: string; added: number; error: string | null };
+export type DigestRunResult = { refreshed: number; added: number; classified: boolean; results: RefreshResult[] };
 
-/** Fetch + classify + store new news for one ticker since its last fetch. */
-export async function refreshTickerNews(
-  ticker: string,
-  companyName: string | null
-): Promise<RefreshResult> {
+type NovelItem = { title: string; url: string; publishedAt?: string; summary?: string };
+type Collected = {
+  ticker: string;
+  companyName: string | null;
+  prevPointer: string | null;
+  advance: boolean;
+  novel: NovelItem[];
+  error: string | null;
+};
+
+/**
+ * Refresh news for every held ASX equity: fetch since last fetch, dedupe, then
+ * classify all new items in a single CLI call, store, and advance fetch pointers.
+ */
+export async function buildNewsDigest(): Promise<DigestRunResult> {
   const db = getDb();
   const nowISO = new Date().toISOString();
-  const state = db.select().from(newsFetchState).where(eq(newsFetchState.ticker, ticker)).get();
+  const held = heldEquityTickers();
 
-  const floor = isoDaysAgo(MAX_LOOKBACK_DAYS);
-  const since = state?.lastFetchedAt && state.lastFetchedAt > floor ? state.lastFetchedAt : floor;
+  // 1. Collect novel items per ticker (no classification yet).
+  const collected: Collected[] = [];
+  for (const { ticker, companyName } of held) {
+    const state = db.select().from(newsFetchState).where(eq(newsFetchState.ticker, ticker)).get();
+    const floor = isoDaysAgo(MAX_LOOKBACK_DAYS);
+    const since = state?.lastFetchedAt && state.lastFetchedAt > floor ? state.lastFetchedAt : floor;
 
-  let added = 0;
-  let error: string | null = null;
-  let advancePointer = true;
+    const entry: Collected = {
+      ticker,
+      companyName,
+      prevPointer: state?.lastFetchedAt ?? null,
+      advance: true,
+      novel: [],
+      error: null,
+    };
 
-  try {
-    const result = await fetchRecentNews(ticker, companyName ?? undefined);
-    if (result.source === "none") {
-      // Total fetch failure — keep the old pointer so we retry this window.
-      advancePointer = false;
-      error = result.warning ?? "no news source available";
-    } else {
-      if (result.warning) error = result.warning;
-      const fresh = result.items.filter((it) => isAfter(it.publishedAt, since));
-
-      const existing = new Set(
-        db.select({ url: newsItems.url }).from(newsItems).where(eq(newsItems.ticker, ticker)).all().map((r) => r.url)
-      );
-      const novel = fresh.filter((it) => it.url && !existing.has(it.url));
-
-      if (novel.length) {
-        let cls: NewsClassification[];
-        try {
-          cls = await classifyNewsBatch(ticker, companyName, novel, getThesisContext(ticker));
-        } catch (e) {
-          // Classification unavailable (no key / API error) — store unclassified
-          // rather than dropping the news; sentiment/impact stay null-ish.
-          error = `classify failed: ${(e as Error).message?.slice(0, 120)}`;
-          cls = novel.map(() => ({ sentiment: "neutral", impact: "low", thesisFlag: false, thesisNote: null, aiSummary: "" }));
-        }
-        db.insert(newsItems)
-          .values(
-            novel.map((it, i) => ({
-              ticker,
-              title: it.title,
-              url: it.url ?? null,
-              publishedAt: it.publishedAt ?? null,
-              summary: it.summary ?? null,
-              sentiment: cls[i].sentiment,
-              impact: cls[i].impact,
-              thesisFlag: cls[i].thesisFlag,
-              thesisNote: cls[i].thesisNote,
-              aiSummary: cls[i].aiSummary || null,
-              fetchedAt: nowISO,
-            }))
-          )
-          .onConflictDoNothing()
-          .run();
-        added = novel.length;
+    try {
+      const result = await fetchRecentNews(ticker, companyName ?? undefined);
+      if (result.source === "none") {
+        entry.advance = false; // total failure — keep pointer, retry next run
+        entry.error = result.warning ?? "no news source available";
+      } else {
+        if (result.warning) entry.error = result.warning;
+        const fresh = result.items.filter((it) => isAfter(it.publishedAt, since));
+        const existing = new Set(
+          db.select({ url: newsItems.url }).from(newsItems).where(eq(newsItems.ticker, ticker)).all().map((r) => r.url)
+        );
+        entry.novel = fresh
+          .filter((it) => it.url && !existing.has(it.url))
+          .map((it) => ({ title: it.title, url: it.url!, publishedAt: it.publishedAt, summary: it.summary }));
       }
+    } catch (e) {
+      entry.advance = false;
+      entry.error = (e as Error).message?.slice(0, 200) ?? "fetch error";
     }
-  } catch (e) {
-    advancePointer = false;
-    error = (e as Error).message?.slice(0, 200) ?? "unknown error";
+    collected.push(entry);
   }
 
-  db.insert(newsFetchState)
-    .values({ ticker, lastFetchedAt: advancePointer ? nowISO : (state?.lastFetchedAt ?? null), lastError: error, updatedAt: nowISO })
-    .onConflictDoUpdate({
-      target: newsFetchState.ticker,
-      set: { lastFetchedAt: advancePointer ? nowISO : (state?.lastFetchedAt ?? null), lastError: error, updatedAt: nowISO },
-    })
-    .run();
+  // 2. Classify all novel items across all holdings in ONE call.
+  const flat: ClassifyInput[] = collected.flatMap((c) =>
+    c.novel.map((it) => ({ ticker: c.ticker, companyName: c.companyName, title: it.title, summary: it.summary, publishedAt: it.publishedAt }))
+  );
+  let classifications: NewsClassification[] = [];
+  let classified = false;
+  let classifyError: string | null = null;
+  if (flat.length && classifierAvailable()) {
+    const thesisByTicker: Record<string, string> = {};
+    for (const c of collected) if (c.novel.length) thesisByTicker[c.ticker] = getThesisContext(c.ticker);
+    try {
+      classifications = await classifyNews(flat, thesisByTicker);
+      classified = true;
+    } catch (e) {
+      classifyError = (e as Error).message?.slice(0, 150) ?? "classify failed";
+    }
+  }
 
-  return { ticker, added, error };
-}
-
-/** Refresh news for every held ASX equity. Sequential to stay gentle on rate limits. */
-export async function buildNewsDigest(): Promise<RefreshResult[]> {
+  // 3. Store items (unclassified items keep null fields for a future reclassify) + advance pointers.
+  let added = 0;
+  let flatIdx = 0;
   const results: RefreshResult[] = [];
-  for (const { ticker, companyName } of heldEquityTickers()) {
-    results.push(await refreshTickerNews(ticker, companyName));
+  for (const c of collected) {
+    if (c.novel.length) {
+      const rows = c.novel.map((it) => {
+        const cls = classifications[flatIdx++];
+        return {
+          ticker: c.ticker,
+          title: it.title,
+          url: it.url,
+          publishedAt: it.publishedAt ?? null,
+          summary: it.summary ?? null,
+          sentiment: cls?.sentiment ?? null,
+          impact: cls?.impact ?? null,
+          thesisFlag: cls?.thesisFlag ?? false,
+          thesisNote: cls?.thesisNote ?? null,
+          aiSummary: cls?.aiSummary || null,
+          fetchedAt: nowISO,
+        };
+      });
+      db.insert(newsItems).values(rows).onConflictDoNothing().run();
+      added += rows.length;
+    }
+
+    const err = c.error ?? (c.novel.length && !classified ? classifyError ?? "classifier unavailable" : null);
+    const pointer = c.advance ? nowISO : c.prevPointer;
+    db.insert(newsFetchState)
+      .values({ ticker: c.ticker, lastFetchedAt: pointer, lastError: err, updatedAt: nowISO })
+      .onConflictDoUpdate({
+        target: newsFetchState.ticker,
+        set: { lastFetchedAt: pointer, lastError: err, updatedAt: nowISO },
+      })
+      .run();
+    results.push({ ticker: c.ticker, added: c.novel.length, error: err });
   }
-  return results;
+
+  return { refreshed: held.length, added, classified, results };
 }
 
 export type DigestItem = {
@@ -198,9 +229,11 @@ export function getPortfolioNewsDigest(opts?: { days?: number; maxPerTicker?: nu
     .orderBy(desc(newsItems.publishedAt))
     .all()
     .filter((r) => {
-      // Keep items published within the window; undated items kept if fetched recently.
-      const stamp = r.publishedAt ?? r.fetchedAt;
-      return !stamp || stamp >= cutoff || (r.publishedAt == null);
+      // Only ISO dates can be compared to the cutoff; relative ("1 month ago") or
+      // undated items fall back to fetch time so they aren't wrongly excluded.
+      const iso = r.publishedAt && /^\d{4}-\d{2}-\d{2}/.test(r.publishedAt) ? r.publishedAt : null;
+      if (iso) return iso >= cutoff;
+      return (r.fetchedAt ?? "") >= cutoff;
     });
 
   const byTicker = new Map<string, DigestItem[]>();
@@ -228,7 +261,6 @@ export function getPortfolioNewsDigest(opts?: { days?: number; maxPerTicker?: nu
       if (ir !== 0) return ir;
       return (b.publishedAt ?? "").localeCompare(a.publishedAt ?? "");
     });
-    const top = items.slice(0, maxPerTicker);
     const worstSentiment = items.some((i) => i.sentiment === "negative")
       ? "negative"
       : items.some((i) => i.sentiment === "positive")
@@ -237,7 +269,7 @@ export function getPortfolioNewsDigest(opts?: { days?: number; maxPerTicker?: nu
     groups.push({
       ticker,
       companyName: nameByTicker.get(ticker) ?? null,
-      items: top,
+      items: items.slice(0, maxPerTicker),
       highImpactCount: items.filter((i) => i.impact === "high").length,
       unseenCount: items.filter((i) => !i.seen).length,
       worstSentiment,

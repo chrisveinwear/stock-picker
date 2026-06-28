@@ -26,7 +26,7 @@ type DigestGroup = {
   thesisFlagged: boolean;
 };
 
-type DigestResponse = { groups: DigestGroup[]; anthropicConfigured: boolean };
+type DigestResponse = { groups: DigestGroup[]; classifierAvailable: boolean };
 
 const sentimentDot: Record<string, string> = {
   positive: "bg-emerald-500",
@@ -98,9 +98,9 @@ export default function NewsDigestPanel() {
           </button>
         </div>
 
-        {data && !data.anthropicConfigured && (
+        {data && !data.classifierAvailable && (
           <p className="text-[11px] text-amber-400/80 mb-3">
-            AI classification off (set ANTHROPIC_API_KEY) — showing headlines only.
+            Claude CLI unavailable — showing headlines without AI classification.
           </p>
         )}
 

@@ -11,9 +11,9 @@
  *
  * The DB is gitignored — nothing to commit.
  */
-import "@/lib/load-env"; // FIRST — loads FIRECRAWL_API_KEY / ANTHROPIC_API_KEY
+import "@/lib/load-env"; // FIRST — loads FIRECRAWL_API_KEY etc.
 import { buildNewsDigest } from "@/lib/news-intel";
-import { anthropicConfigured } from "@/lib/ai/haiku";
+import { classifierAvailable } from "@/lib/ai/classifier";
 
 function log(...parts: unknown[]) {
   console.log(`[refresh-news ${new Date().toISOString()}]`, ...parts);
@@ -21,15 +21,12 @@ function log(...parts: unknown[]) {
 
 async function main() {
   if (!process.env.FIRECRAWL_API_KEY) log("warning: FIRECRAWL_API_KEY not set — news will fall back to Yahoo.");
-  if (!anthropicConfigured()) log("warning: ANTHROPIC_API_KEY not set — news stored unclassified.");
+  if (!classifierAvailable()) log("warning: Claude CLI not found — news stored unclassified.");
 
-  const results = await buildNewsDigest();
-  const added = results.reduce((sum, r) => sum + r.added, 0);
-  const errors = results.filter((r) => r.error);
-
-  log(`refreshed ${results.length} holdings · ${added} new item(s) stored`);
-  for (const r of results.filter((r) => r.added > 0)) log(`  + ${r.ticker}: ${r.added}`);
-  for (const e of errors) log(`  ! ${e.ticker}: ${e.error}`);
+  const run = await buildNewsDigest();
+  log(`refreshed ${run.refreshed} holdings · ${run.added} new item(s) · classified=${run.classified}`);
+  for (const r of run.results.filter((r) => r.added > 0)) log(`  + ${r.ticker}: ${r.added}`);
+  for (const e of run.results.filter((r) => r.error)) log(`  ! ${e.ticker}: ${e.error}`);
   log("done.");
 }
 
