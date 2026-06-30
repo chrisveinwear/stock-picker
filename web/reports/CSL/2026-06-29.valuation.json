@@ -2,31 +2,31 @@
   "model": {
     "kind": "equity",
     "modelVersion": "dcf-v1",
-    "ticker": "BXB.AX",
-    "runAt": "2026-06-28T21:43:03.019Z",
+    "ticker": "CSL.AX",
+    "runAt": "2026-06-29T03:01:17.029Z",
     "ok": true,
     "currency": "AUD",
-    "price": 19.64,
-    "codeIvLow": 12.621876725587379,
-    "codeIvHigh": 21.321161420576345,
-    "codeFairValue": 18.219092765508524,
+    "price": 115.91,
+    "codeIvLow": 87.3500807072829,
+    "codeIvHigh": 170.72660029930265,
+    "codeFairValue": 107.27809379580904,
     "wacc": 0.08,
-    "qualityTier": "wide",
-    "ownerEarningsMultiple": 22,
+    "qualityTier": "narrow",
+    "ownerEarningsMultiple": 10,
     "methods": {
-      "dcf": 15.117024110440703,
-      "ownerEarningsMultiple": 21.321161420576345,
-      "graham": null,
-      "impliedGrowth": 0.06933197609790487
+      "dcf": 134.84657597084262,
+      "ownerEarningsMultiple": 87.3500807072829,
+      "graham": 107.27809379580904,
+      "impliedGrowth": 0.023719673710169586
     },
-    "analystTargetMean": 22.064299,
-    "baseOwnerEarnings": 1294484875.002946,
-    "baseBasis": "forwardNI=1,457,470,414 · marginNorm=1,131,499,336 -> median 1,294,484,875 AUD",
+    "analystTargetMean": 140.07819,
+    "baseOwnerEarnings": 4183300001.733457,
+    "baseBasis": "forwardNI=4,449,365,265 · marginNorm=4,183,300,002 · histMedianOE=2,807,611,800 -> median 4,183,300,002 AUD",
     "sensitivity": {
-      "ivLow": 12.621876725587379,
-      "ivHigh": 19.097890445740234,
-      "central": 15.117024110440703,
-      "swingPct": 42.83921010405838,
+      "ivLow": 112.35751421115042,
+      "ivHigh": 170.72660029930265,
+      "central": 134.84657597084262,
+      "swingPct": 43.285552983394375,
       "lowConfidence": true
     },
     "assumptions": {
@@ -65,48 +65,48 @@
     },
     "inputsProvenance": {
       "fxFinToPrice": {
-        "value": 1.451,
+        "value": 1.4504,
         "source": "yahoo USDAUD=X"
       },
       "price": {
-        "value": 19.64,
+        "value": 115.91,
         "source": "yahoo quote"
       },
       "sharesOutstanding": {
-        "value": 1335699622,
+        "value": 478911979,
         "source": "yahoo quote"
       },
       "beta": {
-        "value": 0.459,
+        "value": 0.094,
         "source": "yahoo"
       },
       "taxRate": {
-        "value": 0.30743874301877155,
+        "value": 0.17336742886140377,
         "source": "history median"
       },
       "costOfDebt": {
-        "value": 0.03152124920037906,
+        "value": 0.03377431569559898,
         "source": "history median"
       },
       "netDebt": {
-        "value": 3984155846.432,
-        "source": "fundamentals"
+        "value": 13548186400,
+        "source": "FTS latest"
       },
       "baseOwnerEarnings": {
-        "value": 1294484875.002946,
-        "source": "median(forwardNI,marginNorm)"
+        "value": 4183300001.733457,
+        "source": "median(forwardNI,marginNorm,histMedianOE)"
       }
     },
     "warnings": [
-      "WACC 6.2% adjusted to 8.0% (floored at 8% per discount-rate policy).",
+      "WACC 4.4% adjusted to 8.0% (floored at 8% per discount-rate policy).",
       "IV swings 43% across the sensitivity grid — low confidence; widen margin of safety."
     ]
   },
   "llm": {
-    "intrinsicValueLow": null,
-    "intrinsicValueHigh": null,
-    "fairValue": null
+    "intrinsicValueLow": 110,
+    "intrinsicValueHigh": 155,
+    "fairValue": 132.5
   },
-  "divergencePct": null,
-  "savedAt": "2026-06-29T00:19:13.771Z"
+  "divergencePct": 23.510770290342617,
+  "savedAt": "2026-06-29T03:19:58.712Z"
 }
