@@ -1,0 +1,110 @@
+{
+  "model": {
+    "kind": "equity",
+    "modelVersion": "dcf-v1",
+    "ticker": "A2M.AX",
+    "runAt": "2026-07-01T05:43:07.569Z",
+    "ok": true,
+    "currency": "AUD",
+    "price": 7.36,
+    "codeIvLow": 1.89761684,
+    "codeIvHigh": 4.701770319057592,
+    "codeFairValue": 2.992428212985816,
+    "wacc": 0.098,
+    "qualityTier": "cyclical",
+    "ownerEarningsMultiple": 7,
+    "methods": {
+      "dcf": 4.087239585971632,
+      "ownerEarningsMultiple": 1.89761684,
+      "graham": null,
+      "impliedGrowth": 0.12050962768985596
+    },
+    "analystTargetMean": null,
+    "baseOwnerEarnings": 196654423.13021526,
+    "baseBasis": "forwardNI=196,654,423 -> median 196,654,423 AUD",
+    "sensitivity": {
+      "ivLow": 3.6426128107588975,
+      "ivHigh": 4.701770319057592,
+      "central": 4.087239585971632,
+      "swingPct": 25.913761256716437,
+      "lowConfidence": true
+    },
+    "assumptions": {
+      "riskFreeRate": {
+        "value": 0.043,
+        "source": "default"
+      },
+      "equityRiskPremium": {
+        "value": 0.055,
+        "source": "default"
+      },
+      "terminalGrowth": {
+        "value": 0.025,
+        "source": "default"
+      },
+      "taxRate": {
+        "value": 0.3,
+        "source": "default"
+      },
+      "costOfDebtFallback": {
+        "value": 0.06,
+        "source": "default"
+      },
+      "stage1Growth": {
+        "value": 0.04,
+        "source": "default"
+      },
+      "exitMultipleEbit": {
+        "value": 12,
+        "source": "default"
+      },
+      "marginOfSafety": {
+        "value": 0.3,
+        "source": "default"
+      }
+    },
+    "inputsProvenance": {
+      "price": {
+        "value": 7.36,
+        "source": "yahoo quote"
+      },
+      "sharesOutstanding": {
+        "value": 725426194,
+        "source": "yahoo quote"
+      },
+      "beta": {
+        "value": 1,
+        "source": "default"
+      },
+      "taxRate": {
+        "value": 0.3,
+        "source": "default 0.30"
+      },
+      "costOfDebt": {
+        "value": 0.06,
+        "source": "default 0.06"
+      },
+      "netDebt": {
+        "value": 0,
+        "source": "fundamentals"
+      },
+      "baseOwnerEarnings": {
+        "value": 196654423.13021526,
+        "source": "median(forwardNI)"
+      }
+    },
+    "warnings": [
+      "Could not fetch NZD->AUD FX; financial figures left unconverted.",
+      "Beta unavailable; defaulted to 1.0.",
+      "No multi-year financial statements returned (FTS empty).",
+      "IV swings 26% across the sensitivity grid — low confidence; widen margin of safety."
+    ]
+  },
+  "llm": {
+    "intrinsicValueLow": 6.5,
+    "intrinsicValueHigh": 9.5,
+    "fairValue": 8
+  },
+  "divergencePct": 167.34141742426885,
+  "savedAt": "2026-07-01T05:58:53.244Z"
+}

@@ -3,30 +3,30 @@
     "kind": "equity",
     "modelVersion": "dcf-v1",
     "ticker": "BXB.AX",
-    "runAt": "2026-06-30T21:51:21.915Z",
+    "runAt": "2026-07-01T04:42:17.119Z",
     "ok": true,
     "currency": "AUD",
-    "price": 19.48,
-    "codeIvLow": 12.898378487081924,
-    "codeIvHigh": 21.682101330892543,
-    "codeFairValue": 18.55893342353685,
+    "price": 19.585,
+    "codeIvLow": 12.914536583124878,
+    "codeIvHigh": 21.72018857914589,
+    "codeFairValue": 18.58828471015869,
     "wacc": 0.08,
     "qualityTier": "wide",
     "ownerEarningsMultiple": 22,
     "methods": {
-      "dcf": 15.435765516181153,
-      "ownerEarningsMultiple": 21.682101330892543,
+      "dcf": 15.456380841171491,
+      "ownerEarningsMultiple": 21.72018857914589,
       "graham": null,
-      "impliedGrowth": 0.06612224632113228
+      "impliedGrowth": 0.0665728928046091
     },
-    "analystTargetMean": 22.009937,
-    "baseOwnerEarnings": 1316398843.265403,
-    "baseBasis": "forwardNI=1,460,362,872 · marginNorm=1,172,434,815 -> median 1,316,398,843 AUD",
+    "analystTargetMean": 22.096758,
+    "baseOwnerEarnings": 1318711257.9515402,
+    "baseBasis": "forwardNI=1,460,362,872 · marginNorm=1,177,059,644 -> median 1,318,711,258 AUD",
     "sensitivity": {
-      "ivLow": 12.898378487081924,
-      "ivHigh": 19.484022811555544,
-      "central": 15.435765516181153,
-      "swingPct": 42.66483782466089,
+      "ivLow": 12.914536583124878,
+      "ivHigh": 19.51174939288812,
+      "central": 15.456380841171491,
+      "swingPct": 42.68277857252395,
       "lowConfidence": true
     },
     "assumptions": {
@@ -65,11 +65,11 @@
     },
     "inputsProvenance": {
       "fxFinToPrice": {
-        "value": 1.445,
+        "value": 1.4507,
         "source": "yahoo USDAUD=X"
       },
       "price": {
-        "value": 19.48,
+        "value": 19.585,
         "source": "yahoo quote"
       },
       "sharesOutstanding": {
@@ -89,11 +89,11 @@
         "source": "history median"
       },
       "netDebt": {
-        "value": 3967681046.2400002,
+        "value": 3983332106.4224005,
         "source": "fundamentals"
       },
       "baseOwnerEarnings": {
-        "value": 1316398843.265403,
+        "value": 1318711257.9515402,
         "source": "median(forwardNI,marginNorm)"
       }
     },
@@ -103,10 +103,10 @@
     ]
   },
   "llm": {
-    "intrinsicValueLow": null,
-    "intrinsicValueHigh": null,
-    "fairValue": null
+    "intrinsicValueLow": 16.5,
+    "intrinsicValueHigh": 23.5,
+    "fairValue": 20
   },
-  "divergencePct": null,
-  "savedAt": "2026-07-01T01:20:02.605Z"
+  "divergencePct": 7.594650673011233,
+  "savedAt": "2026-07-01T04:59:44.845Z"
 }

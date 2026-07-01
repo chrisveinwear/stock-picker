@@ -1,0 +1,108 @@
+{
+  "model": {
+    "kind": "equity",
+    "modelVersion": "dcf-v1",
+    "ticker": "DMP.AX",
+    "runAt": "2026-07-01T06:46:04.246Z",
+    "ok": true,
+    "currency": "AUD",
+    "price": 15.7,
+    "codeIvLow": 0.15690252476981736,
+    "codeIvHigh": 11.8495042604809,
+    "codeFairValue": 11.146081074597232,
+    "wacc": 0.08,
+    "qualityTier": "average",
+    "ownerEarningsMultiple": 12.5,
+    "methods": {
+      "dcf": 2.452629362208255,
+      "ownerEarningsMultiple": 11.146081074597232,
+      "graham": 11.8495042604809,
+      "impliedGrowth": 0.11694952043203843
+    },
+    "analystTargetMean": 20.50333,
+    "baseOwnerEarnings": 84484500,
+    "baseBasis": "forwardNI=128,022,913 · marginNorm=64,731,710 · histMedianOE=84,484,500 -> median 84,484,500 AUD",
+    "sensitivity": {
+      "ivLow": 0.15690252476981736,
+      "ivHigh": 6.115331508654634,
+      "central": 2.452629362208255,
+      "swingPct": 242.94045711497444,
+      "lowConfidence": true
+    },
+    "assumptions": {
+      "riskFreeRate": {
+        "value": 0.043,
+        "source": "default"
+      },
+      "equityRiskPremium": {
+        "value": 0.055,
+        "source": "default"
+      },
+      "terminalGrowth": {
+        "value": 0.025,
+        "source": "default"
+      },
+      "taxRate": {
+        "value": 0.3,
+        "source": "default"
+      },
+      "costOfDebtFallback": {
+        "value": 0.06,
+        "source": "default"
+      },
+      "stage1Growth": {
+        "value": 0.04,
+        "source": "default"
+      },
+      "exitMultipleEbit": {
+        "value": 12,
+        "source": "default"
+      },
+      "marginOfSafety": {
+        "value": 0.3,
+        "source": "default"
+      }
+    },
+    "inputsProvenance": {
+      "price": {
+        "value": 15.7,
+        "source": "yahoo quote"
+      },
+      "sharesOutstanding": {
+        "value": 94746866,
+        "source": "yahoo quote"
+      },
+      "beta": {
+        "value": 1,
+        "source": "yahoo"
+      },
+      "taxRate": {
+        "value": 0.3105557117106921,
+        "source": "history median"
+      },
+      "costOfDebt": {
+        "value": 0.02,
+        "source": "history median"
+      },
+      "netDebt": {
+        "value": 1345464000,
+        "source": "FTS latest"
+      },
+      "baseOwnerEarnings": {
+        "value": 84484500,
+        "source": "median(forwardNI,marginNorm,histMedianOE)"
+      }
+    },
+    "warnings": [
+      "WACC 5.8% adjusted to 8.0% (floored at 8% per discount-rate policy).",
+      "IV swings 243% across the sensitivity grid — low confidence; widen margin of safety."
+    ]
+  },
+  "llm": {
+    "intrinsicValueLow": 11,
+    "intrinsicValueHigh": 18,
+    "fairValue": 14.5
+  },
+  "divergencePct": 30.090566387917317,
+  "savedAt": "2026-07-01T06:59:02.639Z"
+}
