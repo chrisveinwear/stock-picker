@@ -5,10 +5,10 @@
  */
 import { MODEL_VERSION } from "./model-template";
 import { getValuationInputs, type ValuationInputs } from "./inputs";
-import { resolveAssumptions, QUALITY_MULTIPLES, type Tagged } from "./assumptions";
+import { resolveAssumptions, QUALITY_MULTIPLES, DEFAULTS, type Tagged } from "./assumptions";
 import {
-  wacc as computeWacc,
-  twoStageDcf,
+  costOfEquity as computeCostOfEquity,
+  equityDcf,
   sensitivityGrid,
   ownerEarningsMultiple,
   grahamNumber,
@@ -16,6 +16,7 @@ import {
   qualityTier,
   type DcfParams,
 } from "./dcf";
+import type { FinancialYear } from "@/lib/yahoo-finance";
 
 export type ValuationResult = {
   kind: "equity";
@@ -28,9 +29,15 @@ export type ValuationResult = {
   codeIvLow: number;
   codeIvHigh: number;
   codeFairValue: number;
-  wacc: number;
+  /** CAPM cost of equity used to discount the (levered) owner earnings. */
+  discountRate: number;
   qualityTier: string;
   ownerEarningsMultiple: number;
+  /** Terminal exit multiple actually applied (tier-derived unless overridden). */
+  exitMultiple: number;
+  /** Stage-1 growth actually applied (analyst-derived when possible). */
+  stage1Growth: number;
+  netDebt: number;
   methods: {
     dcf: number;
     ownerEarningsMultiple: number;
@@ -43,6 +50,8 @@ export type ValuationResult = {
   sensitivity: { ivLow: number; ivHigh: number; central: number; swingPct: number; lowConfidence: boolean };
   assumptions: Record<string, Tagged>;
   inputsProvenance: ValuationInputs["provenance"];
+  /** Annual statement history the inputs were derived from (for prompt injection). */
+  history: FinancialYear[];
   warnings: string[];
 };
 
@@ -58,43 +67,68 @@ export async function runEquityValuation(
   sector?: string | null
 ): Promise<ValuationResult> {
   const inputs = await getValuationInputs(ticker);
-  const a = resolveAssumptions(ticker, sector);
+  const a = resolveAssumptions(ticker, sector ?? inputs.sector);
   const warnings = [...inputs.warnings];
 
-  const equityValue = inputs.price * inputs.sharesOutstanding;
-  const rawWacc = computeWacc({
+  // Discount rate: CAPM cost of equity on the sanitised beta, clamped into the
+  // policy band. Owner earnings are post-interest, so no WACC blending and no
+  // further net-debt deduction (that would double-count debt).
+  const rawCoe = computeCostOfEquity({
     beta: inputs.beta,
     riskFreeRate: a.riskFreeRate.value,
     equityRiskPremium: a.equityRiskPremium.value,
-    costOfDebt: inputs.costOfDebt,
-    taxRate: inputs.taxRate,
-    equityValue,
-    debtValue: Math.max(inputs.netDebt, 0),
   });
-  // Floor at 8% (risk-free + ~3-5% company premium per philosophy; also avoids the
-  // degenerate low-beta / over-levered case discounting equity cash flows too cheaply).
-  const wacc = clamp(rawWacc, 0.08, 0.16);
-  if (wacc !== rawWacc) warnings.push(`WACC ${(rawWacc * 100).toFixed(1)}% adjusted to ${(wacc * 100).toFixed(1)}% (floored at 8% per discount-rate policy).`);
+  const discountRate = clamp(rawCoe, a.discountRateFloor.value, a.discountRateCeiling.value);
+  if (discountRate !== rawCoe) {
+    warnings.push(
+      `Cost of equity ${(rawCoe * 100).toFixed(1)}% adjusted to ${(discountRate * 100).toFixed(1)}% (policy band ${(a.discountRateFloor.value * 100).toFixed(0)}–${(a.discountRateCeiling.value * 100).toFixed(0)}%).`
+    );
+  }
+
+  // Stage-1 growth: derived from the analyst forward vs trailing EPS when both
+  // are usable; otherwise the file/DB assumption. Explicit DB/sector overrides win.
+  let stage1: Tagged = a.stage1Growth;
+  const growthOverridden = a.stage1Growth.source !== "default";
+  if (!growthOverridden && inputs.epsForward != null && inputs.epsTrailing != null && inputs.epsTrailing > 0 && inputs.epsForward > 0) {
+    const g = clamp(inputs.epsForward / inputs.epsTrailing - 1, a.stage1GrowthMin.value, a.stage1GrowthMax.value);
+    stage1 = { value: g, source: "derived", note: "analyst forward vs trailing EPS, clamped" };
+  }
+  a.stage1Growth = stage1;
+
+  // Terminal exit multiple: derived from the quality tier (clamped into the
+  // policy band) unless explicitly overridden in the DB/sector layer.
+  const tier = qualityTier(inputs.returnOnEquityPct, inputs.profitMarginsPct);
+  const tierMultiple = QUALITY_MULTIPLES[tier] ?? DEFAULTS.exitMultiple;
+  if (a.exitMultiple.source === "default") {
+    a.exitMultiple = {
+      value: clamp(tierMultiple, a.exitMultipleMin.value, a.exitMultipleMax.value),
+      source: "derived",
+      note: `quality tier "${tier}" multiple, clamped`,
+    };
+  }
 
   const params: DcfParams = {
     baseOwnerEarnings: inputs.baseOwnerEarnings,
-    growth: a.stage1Growth.value,
+    growth: stage1.value,
     years: 10,
     terminalGrowth: a.terminalGrowth.value,
-    wacc,
-    exitMultiple: a.exitMultipleEbit.value,
-    netDebt: inputs.netDebt,
+    discountRate,
+    exitMultiple: a.exitMultiple.value,
     shares: inputs.sharesOutstanding,
   };
 
+  const central = equityDcf(params);
+  if (central.tvSpreadFloored) {
+    warnings.push("Perpetuity spread (discount rate − terminal growth) was floored at 1% — terminal value is capped, not exploded.");
+  }
   const sens = sensitivityGrid(params);
   if (sens.lowConfidence) warnings.push(`IV swings ${sens.swingPct.toFixed(0)}% across the sensitivity grid — low confidence; widen margin of safety.`);
 
-  const tier = qualityTier(inputs.returnOnEquityPct, inputs.profitMarginsPct);
   const multiple = QUALITY_MULTIPLES[tier];
   const oeMultIV = ownerEarningsMultiple(inputs.baseOwnerEarnings, inputs.sharesOutstanding, multiple);
-  const nEps = inputs.sharesOutstanding > 0 ? inputs.baseOwnerEarnings / inputs.sharesOutstanding : 0;
-  const graham = grahamNumber(nEps, inputs.bookValuePerShare);
+  // Graham number takes ACTUAL trailing EPS (reconciled to the price currency) —
+  // its 22.5 constant is calibrated to net earnings, not owner earnings.
+  const graham = grahamNumber(inputs.epsTrailing, inputs.bookValuePerShare);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { growth: _g, ...noGrowth } = params;
   const implied = impliedGrowth(inputs.price, noGrowth);
@@ -120,9 +154,12 @@ export async function runEquityValuation(
     codeIvLow,
     codeIvHigh,
     codeFairValue,
-    wacc,
+    discountRate,
     qualityTier: tier,
     ownerEarningsMultiple: multiple,
+    exitMultiple: a.exitMultiple.value,
+    stage1Growth: stage1.value,
+    netDebt: inputs.netDebt,
     methods: {
       dcf: sens.central,
       ownerEarningsMultiple: oeMultIV,
@@ -135,6 +172,7 @@ export async function runEquityValuation(
     sensitivity: sens,
     assumptions: a,
     inputsProvenance: inputs.provenance,
+    history: inputs.history,
     warnings,
   };
 }

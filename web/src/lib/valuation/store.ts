@@ -20,7 +20,12 @@ export type ValuationSidecar = {
     intrinsicValueLow: number | null;
     intrinsicValueHigh: number | null;
     fairValue: number | null;
+    /** The LLM's lens-consensus thresholds — archived for audit; NOT used for alerts. */
+    consensusBuyBelow?: number | null;
+    consensusSellAbove?: number | null;
   };
+  /** The code-derived thresholds actually written to the DB / alert engine. */
+  dbThresholds?: { buyBelow: number; sellAbove: number; source: string } | null;
   divergencePct: number | null; // (llm fair value vs code fair value)
   savedAt: string;
 };

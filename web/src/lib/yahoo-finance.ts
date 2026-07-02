@@ -108,6 +108,8 @@ export async function getQuotes(tickers: string[]): Promise<StockQuote[]> {
 // sanity check against the model's own intrinsic value).
 export type EquityFundamentals = {
   ticker: string;
+  sector: string | null;
+  industry: string | null;
   priceCurrency: string | null;
   financialCurrency: string | null;
   price: number | null;
@@ -210,17 +212,37 @@ export async function getFxRate(base: string, quote: string): Promise<number | n
   }
 }
 
+// A single report generation hits fundamentals 3+ times (snapshot, valuation
+// inputs, Morningstar price) — cache per ticker for a few minutes to avoid
+// hammering Yahoo and to keep all consumers on identical figures.
+const FUNDAMENTALS_TTL_MS = 10 * 60 * 1000;
+const fundamentalsCache = new Map<string, { at: number; value: EquityFundamentals | null }>();
+
 export async function getEquityFundamentals(
   ticker: string
 ): Promise<EquityFundamentals | null> {
   const normTicker = normaliseTicker(ticker);
+  const hit = fundamentalsCache.get(normTicker);
+  if (hit && Date.now() - hit.at < FUNDAMENTALS_TTL_MS) return hit.value;
+  const value = await fetchEquityFundamentals(normTicker);
+  // Never cache a failed fetch — a transient Yahoo error would otherwise poison
+  // every consumer (snapshot, valuation, Morningstar) for the whole TTL.
+  if (value != null && value.price != null) {
+    fundamentalsCache.set(normTicker, { at: Date.now(), value });
+  }
+  return value;
+}
+
+async function fetchEquityFundamentals(
+  normTicker: string
+): Promise<EquityFundamentals | null> {
   try {
     const [q, s] = await Promise.all([
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       yahooFinance.quote(normTicker) as Promise<any>,
       yahooFinance
         .quoteSummary(normTicker, {
-          modules: ["financialData", "defaultKeyStatistics", "summaryDetail"],
+          modules: ["financialData", "defaultKeyStatistics", "summaryDetail", "summaryProfile"],
         })
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .catch(() => null) as Promise<any>,
@@ -229,10 +251,13 @@ export async function getEquityFundamentals(
     const fd = s?.financialData ?? {};
     const ks = s?.defaultKeyStatistics ?? {};
     const sd = s?.summaryDetail ?? {};
+    const sp = s?.summaryProfile ?? {};
     const pct = (v: unknown) => (typeof v === "number" ? v * 100 : null);
 
     return {
       ticker: normTicker,
+      sector: sp.sector ?? null,
+      industry: sp.industry ?? null,
       priceCurrency: q.currency ?? null,
       financialCurrency: q.financialCurrency ?? null,
       price: q.regularMarketPrice ?? fd.currentPrice ?? null,
@@ -372,13 +397,14 @@ export type PriceHistory = {
 
 export async function getPriceHistory(
   ticker: string,
-  period: "1mo" | "3mo" | "6mo" | "1y" | "2y" | "5y" = "1y"
+  period: "1mo" | "3mo" | "6mo" | "1y" | "2y" | "5y" = "1y",
+  interval?: "1d" | "1wk"
 ): Promise<PriceHistory[]> {
   const normTicker = normaliseTicker(ticker);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result: any = await yahooFinance.chart(normTicker, {
     period1: getPeriodStart(period),
-    interval: period === "1mo" ? "1d" : period === "3mo" ? "1d" : "1wk",
+    interval: interval ?? (period === "1mo" ? "1d" : period === "3mo" ? "1d" : "1wk"),
   });
 
   return (result.quotes ?? [])
@@ -412,6 +438,23 @@ const COMMODITY_SYMBOLS: Record<string, string> = {
   BRENT: "BZ=F",     // Brent crude, USD/bbl
   COPPER: "HG=F",    // USD/lb
 };
+
+/**
+ * Live USD spot for a physical commodity (GOLD, OIL, …) via its futures symbol.
+ * Used by the alert engine so commodity watch-list rows are priced per-unit in
+ * USD — NOT quoted as "<TICKER>.AX" (which for GOLD would be the BetaShares ETF).
+ */
+export async function getCommoditySpotUsd(commodity: string): Promise<number | null> {
+  const symbol = COMMODITY_SYMBOLS[commodity.trim().toUpperCase()];
+  if (!symbol) return null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const q: any = await yahooFinance.quote(symbol);
+    return q?.regularMarketPrice ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /** Raw weekly close series for a Yahoo symbol that must NOT be ".AX"-normalised. */
 async function getRawHistory(symbol: string, period: string): Promise<PriceHistory[]> {

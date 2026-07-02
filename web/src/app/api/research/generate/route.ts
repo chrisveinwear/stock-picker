@@ -13,8 +13,15 @@ import { getDb } from "@/db";
 import { researchReports, alertLog } from "@/db/schema";
 import { fetchRecentNews, formatNewsForPrompt } from "@/lib/news-fetcher";
 import { addReportToWatchlist } from "@/lib/watchlist";
-import { getCommodityPriceHistory, getEquityFundamentals } from "@/lib/yahoo-finance";
+import {
+  getCommodityPriceHistory,
+  getEquityFundamentals,
+  getPriceHistory,
+  type FinancialYear,
+} from "@/lib/yahoo-finance";
+import { computeTechnicals, formatTechnicalsForPrompt } from "@/lib/technicals";
 import { runEquityValuation, type ValuationResult } from "@/lib/valuation";
+import { formatMorningstarForPrompt } from "@/lib/morningstar";
 import { runCommodityValuation, type CommodityValuationResult } from "@/lib/valuation/commodity";
 import { describeModelTemplate } from "@/lib/valuation/model-template";
 import { saveValuationSidecar } from "@/lib/valuation/store";
@@ -48,8 +55,12 @@ const CLAUDE_BINARY = resolveClaudeBinary();
 
 const PROJECT_ROOT = path.join(process.cwd(), "..");
 
+/** Local-timezone calendar date. toISOString() is UTC, which stamps reports
+ *  generated before ~10am AEST with the previous day's date. */
 function today(): string {
-  return new Date().toISOString().split("T")[0];
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 /**
@@ -91,15 +102,20 @@ async function fetchEquitySnapshot(ticker: string): Promise<string> {
     v == null ? "n/a" : v.toLocaleString("en-US", { maximumFractionDigits: d });
   const bn = (v: number | null) => (v == null ? "n/a" : `${(v / 1e9).toFixed(2)}bn`);
   const pc = (v: number | null) => (v == null ? "n/a" : `${v.toFixed(1)}%`);
+  // Yahoo reports debtToEquity as a PERCENTAGE (e.g. 41.2 = 0.41x) — convert to a
+  // ratio so the model doesn't read 41x leverage against the D/E < 1.0x screen.
+  const de =
+    f.debtToEquity == null ? "n/a" : `${(f.debtToEquity > 5 ? f.debtToEquity / 100 : f.debtToEquity).toFixed(2)}x`;
 
   const lines: string[] = [
     `- Current price: ${cur} ${n(f.price)} (prev close ${n(f.previousClose)})`,
+    `- Sector: ${f.sector ?? "n/a"} · Industry: ${f.industry ?? "n/a"}`,
     `- Market cap: ${cur} ${bn(f.marketCap)} · Shares outstanding: ${f.sharesOutstanding != null ? `${(f.sharesOutstanding / 1e6).toFixed(1)}m` : "n/a"}`,
     `- P/E trailing ${n(f.trailingPE, 1)} · P/E forward ${n(f.forwardPE, 1)} · P/B ${n(f.priceToBook, 2)}`,
     `- EPS trailing ${n(f.epsTrailing)} · EPS forward ${n(f.epsForward)} · Dividend yield ${pc(f.dividendYieldPct)} · Beta ${n(f.beta, 2)}`,
     `- 52-week range: ${n(f.fiftyTwoWeekLow)} – ${n(f.fiftyTwoWeekHigh)}`,
     `- Financials (${fcur}): revenue ${bn(f.totalRevenue)} · EBITDA ${bn(f.ebitda)} · FCF ${bn(f.freeCashflow)} · total debt ${bn(f.totalDebt)} · cash ${bn(f.totalCash)}`,
-    `- Margins: gross ${pc(f.grossMarginsPct)} · operating ${pc(f.operatingMarginsPct)} · net ${pc(f.profitMarginsPct)} · ROE ${pc(f.returnOnEquityPct)} · D/E ${n(f.debtToEquity, 1)}`,
+    `- Margins: gross ${pc(f.grossMarginsPct)} · operating ${pc(f.operatingMarginsPct)} · net ${pc(f.profitMarginsPct)} · ROE ${pc(f.returnOnEquityPct)} · D/E ${de}`,
   ];
   if (f.targetMeanPrice != null) {
     lines.push(
@@ -115,6 +131,39 @@ These are the live, verified market data and fundamentals for ${ticker}. You MUS
 ${lines.join("\n")}
 
 Reconciliation guard: after computing your intrinsic value, compare its midpoint to the current price above. If they differ by more than ~40%, STOP and re-examine your inputs and assumptions before finalising — a large gap to a liquid market price (and to the analyst consensus target) is far more often a sign of an input error on your side than a genuine 40%+ mispricing. Explicitly explain any remaining gap. Sanity-check your P/E, EPS and per-share figures against the authoritative numbers above.`;
+}
+
+/**
+ * Multi-year statement table so the Part B lenses (revenue CAGR, margin trends,
+ * balance-sheet health) are computed from real filings, not recalled from memory.
+ */
+function formatFinancialHistoryForPrompt(history: FinancialYear[], financialCurrency: string): string {
+  if (!history.length) return "";
+  const m = (v: number | null) => (v == null ? "n/a" : (v / 1e6).toFixed(0));
+  const rows = history
+    .map(
+      (h) =>
+        `| ${h.date} | ${m(h.totalRevenue)} | ${m(h.netIncome)} | ${m(h.operatingCashFlow)} | ${m(h.freeCashFlow)} | ${m(h.capitalExpenditure)} | ${m(h.totalDebt)} | ${m(h.cashAndCashEquivalents)} | ${m(h.stockholdersEquity)} |`
+    )
+    .join("\n");
+  return `\n\n## Annual Financial History (authoritative — ${financialCurrency} millions, from filings)
+
+Use this table for any multi-year figure in the report (revenue CAGR, margin trends, debt trajectory). Do NOT recall historical financials from memory.
+
+| FY end | Revenue | Net income | Op cash flow | FCF | Capex | Total debt | Cash | Equity |
+|---|---|---|---|---|---|---|---|---|
+${rows}`;
+}
+
+/** Computed technical indicators for the Citadel lens; "" when history is thin. */
+async function fetchTechnicalsBlock(ticker: string, currency: string): Promise<string> {
+  try {
+    const daily = await getPriceHistory(ticker, "2y", "1d");
+    const t = computeTechnicals(daily);
+    return t ? formatTechnicalsForPrompt(t, currency) : "";
+  } catch {
+    return "";
+  }
 }
 
 /**
@@ -140,7 +189,8 @@ ${describeModelTemplate()}
 
 Code-computed result (the quantitative backbone — use it; do not invent a parallel arithmetic):
 - Code fair value: **${c} ${n(v.codeFairValue)}** · IV range ${c} ${n(v.codeIvLow)}–${n(v.codeIvHigh)}
-- WACC: ${(v.wacc * 100).toFixed(1)}% · quality tier: ${v.qualityTier} (owner-earnings multiple ${v.ownerEarningsMultiple}x)
+- Discount rate (CAPM cost of equity): ${(v.discountRate * 100).toFixed(1)}% · stage-1 growth ${(v.stage1Growth * 100).toFixed(1)}% fading to terminal · quality tier: ${v.qualityTier} (owner-earnings multiple ${v.ownerEarningsMultiple}x, terminal exit multiple ${v.exitMultiple}x)
+- Net debt (context only — the DCF discounts post-interest owner earnings, so it is NOT deducted again): ${c} ${n(v.netDebt / 1e9)}bn
 - Method triangulation: DCF ${n(v.methods.dcf)} · owner-earnings-multiple ${n(v.methods.ownerEarningsMultiple)} · Graham ${v.methods.graham == null ? "n/a" : n(v.methods.graham)} · reverse-DCF implied growth ${v.methods.impliedGrowth == null ? "n/a" : (v.methods.impliedGrowth * 100).toFixed(1) + "%"}
 - Normalised earnings base: ${v.baseBasis}
 - Analyst consensus target: ${v.analystTargetMean == null ? "n/a" : c + " " + n(v.analystTargetMean)}
@@ -180,7 +230,7 @@ This is the FIXED commodity valuation structure (cost curve + incentive price) u
 Code-computed result (the quantitative backbone — use it; do not invent a parallel calculation):
 - Incentive price (fair value): **${n(v.codeFairValue)} ${u}** · value zone ${n(v.codeIvLow)}–${n(v.codeIvHigh)} ${u}
 - Live spot: ${n(v.price)} ${u} (${v.spotVsIncentivePct == null ? "n/a" : (v.spotVsIncentivePct > 0 ? "+" : "") + v.spotVsIncentivePct.toFixed(0) + "% vs incentive"})
-- Cost curve: AISC 50th ${n(v.costCurve.aisc50)} · AISC 90th ${n(v.costCurve.aisc90)} ${u} · thesis ${v.costCurve.thesis}
+- Cost curve: AISC 50th ${n(v.costCurve.aisc50)} · AISC 90th ${n(v.costCurve.aisc90)} ${u} · thesis ${v.costCurve.thesis} · estimates as of ${v.costCurve.asOf || "n/a"} (${v.costCurve.source || "unsourced"})
 - Zones: buy below ${n(v.buyBelow)} · avoid above ${n(v.sellAbove)} ${u} · code verdict zone: ${v.verdictZone}
 - Cost-curve assumptions (source-tagged — these are MAINTAINED estimates, update them if stale):
 ${assumptionLines}
@@ -199,12 +249,23 @@ function buildPrompt(
   name?: string,
   newsContext?: string,
   historyContext?: string,
-  marketContext?: string
+  marketContext?: string,
+  morningstarContext?: string
 ): string {
   const date = today();
   const label = name ? `${ticker} (${name})` : ticker;
   const historySection = historyContext ?? "";
   const marketSection = marketContext ?? "";
+  const morningstarSection = morningstarContext ?? "";
+  // Only advertise the Morningstar lens in the priceLenses spec when we actually
+  // have imported data for this ticker — otherwise the LLM would fabricate it.
+  const morningstarLens = morningstarSection
+    ? `
+  - name: "Morningstar"
+    buyBelow: <number — Morningstar implied fair value adjusted down for its uncertainty band>
+    fairValue: <number — Morningstar implied fair value = live price ÷ Price/Fair Value>
+    sellAbove: <number — Morningstar implied fair value adjusted up for its uncertainty band>`
+    : "";
 
   const priceLensesInstruction = `
 The frontmatter MUST include a priceLenses YAML array summarising the buy/hold/sell price targets from each applicable institutional lens in Part B, followed by consensus values. Every number must be a bare numeric value with no currency symbol or units.
@@ -241,14 +302,24 @@ priceLenses:
   - name: "McKinsey Macro"
     buyBelow: <number>
     fairValue: <number>
-    sellAbove: <number>
+    sellAbove: <number>${morningstarLens}
 consensusBuyBelow: <number — weighted consensus of all lens buyBelow values; this is the AI recommended maximum buy price>
 consensusSellAbove: <number — weighted consensus of all lens sellAbove values; this is the AI recommended minimum sell price>
 
 Coherence rules (the thresholds must not contradict your own valuation):
 - consensusBuyBelow MUST be ≤ intrinsicValueLow (you only buy at or below the low end of fair value).
 - consensusSellAbove MUST be ≥ intrinsicValueHigh (never recommend selling below your own fair-value ceiling).
-- For every lens: buyBelow < fairValue < sellAbove.`;
+- For every lens: buyBelow < fairValue < sellAbove.
+- Lens targets are your judgment ANCHORED to the code model fair value and the authoritative data above. The system computes the actual buy/sell alert thresholds independently from the code model; your lens targets are commentary.`;
+
+  const dataIntegrityRules = `
+## Data Integrity Rules (mandatory — apply to every section)
+
+- Every numeric claim must come from the data provided in this prompt (market snapshot, financial history table, computed technicals, valuation model, news, Morningstar) or be clearly labelled as an assumption with its basis. Never present a remembered or estimated figure as data.
+- ASX companies report HALF-YEARLY, not quarterly. In the earnings-analysis section, analyse the most recent half-year/full-year results using the financial history and news provided. Consensus-estimate history, beat/miss records and post-earnings price reactions are NOT provided — state "consensus history not available" instead of inventing an estimates table.
+- In the technical-analysis section, use ONLY the readings in the "Computed Technicals" block, verbatim. Do not invent indicator values, chart patterns, or volume behaviour beyond what those figures support. If the block is absent, state that technical data was unavailable.
+- Insider-trading, short-interest and institutional-ownership data are NOT provided. In the quant-patterns section, state explicitly that these datapoints are unavailable rather than inventing figures; seasonal/behavioural commentary must be clearly framed as qualitative.
+- Peer comparisons may use well-known structural facts (who the competitors are, rough relative scale) but present peer FINANCIAL figures as approximate and flag them as unverified.`;
 
   const newsSection = newsContext ? `\n\n## Live Market Context\n\nThe following recent news and ASX announcements were fetched immediately before generating this report. Use them to inform current sentiment, recent events, and any catalyst or risk sections:\n\n${newsContext}` : "";
 
@@ -259,8 +330,10 @@ Generate a comprehensive investment research report following the full analysis 
 
 Today's date: ${date}
 ${marketSection}
+${morningstarSection}
 ${newsSection}
 ${historySection}
+${dataIntegrityRules}
 
 ${priceLensesInstruction}
 
@@ -312,7 +385,40 @@ ${commodityLensesInstruction}
 Output ONLY the complete markdown report, beginning directly with the YAML frontmatter block delimited by --- lines. Do NOT wrap the frontmatter or any part of the report in code fences (no \`\`\`yaml or \`\`\`markdown). Do NOT use any tools and do NOT save the file yourself — just print the raw markdown report to stdout. No preamble or commentary outside the report.`;
 }
 
-function saveReportToDB(ticker: string, filePath: string, content: string) {
+/** Buy/sell alert thresholds derived from the CODE valuation model — the LLM's
+ *  lens "consensus" numbers are commentary only and are used as a fallback
+ *  solely when the deterministic engine could not produce a value. */
+export type CodeThresholds = { buyBelow: number; sellAbove: number; source: string };
+
+function deriveCodeThresholds(
+  valuation: ValuationResult | CommodityValuationResult | null
+): CodeThresholds | null {
+  if (!valuation || !(valuation.codeFairValue > 0)) return null;
+  if (valuation.kind === "commodity") {
+    // The commodity model's zones (incentive price / oversupply band) come from
+    // the maintained cost curve — valid even when the live-spot fetch failed.
+    return {
+      buyBelow: valuation.buyBelow,
+      sellAbove: valuation.sellAbove,
+      source: `${valuation.modelVersion} incentive zones`,
+    };
+  }
+  if (!valuation.ok) return null; // equity model built on missing inputs — don't trust it
+  const mos = valuation.assumptions.marginOfSafety?.value ?? 0.30;
+  return {
+    buyBelow: valuation.codeFairValue * (1 - mos),
+    sellAbove: valuation.codeFairValue * (1 + mos),
+    source: `${valuation.modelVersion} fair value ±${(mos * 100).toFixed(0)}% MOS`,
+  };
+}
+
+function saveReportToDB(
+  ticker: string,
+  filePath: string,
+  content: string,
+  codeThresholds: CodeThresholds | null,
+  autoWatchlist: boolean
+) {
   try {
     const { data } = matter(content);
 
@@ -355,16 +461,24 @@ function saveReportToDB(ticker: string, filePath: string, content: string) {
       )
       .run();
 
-    // Coherence clamp: never let the sell trigger sit below the fair-value ceiling
-    // or the buy trigger above the floor — an incoherent threshold (e.g. AMC's
-    // sellAbove 31.70 vs IV high 38) fires false sell alerts. Enforce even if the
-    // model ignored the prompt instruction.
     const ivLow = data.intrinsicValueLow ?? null;
     const ivHigh = data.intrinsicValueHigh ?? null;
-    let buyBelow: number | null = data.consensusBuyBelow ?? null;
-    let sellAbove: number | null = data.consensusSellAbove ?? null;
-    if (sellAbove != null && ivHigh != null && sellAbove < ivHigh) sellAbove = ivHigh;
-    if (buyBelow != null && ivLow != null && buyBelow > ivLow) buyBelow = ivLow;
+    // Alert thresholds come from the deterministic code model, NOT the LLM's lens
+    // consensus (those numbers are narrative judgment, historically incoherent —
+    // e.g. GOLD thresholds flipping currency between reports). The LLM consensus
+    // is only a fallback when the engine had nothing, with a coherence clamp so a
+    // sell trigger can never sit below the report's own fair-value ceiling.
+    let buyBelow: number | null;
+    let sellAbove: number | null;
+    if (codeThresholds) {
+      buyBelow = Number(codeThresholds.buyBelow.toFixed(2));
+      sellAbove = Number(codeThresholds.sellAbove.toFixed(2));
+    } else {
+      buyBelow = data.consensusBuyBelow ?? null;
+      sellAbove = data.consensusSellAbove ?? null;
+      if (sellAbove != null && ivHigh != null && sellAbove < ivHigh) sellAbove = ivHigh;
+      if (buyBelow != null && ivLow != null && buyBelow > ivLow) buyBelow = ivLow;
+    }
 
     db.insert(researchReports)
       .values({
@@ -382,14 +496,18 @@ function saveReportToDB(ticker: string, filePath: string, content: string) {
       })
       .run();
 
-    // Automatically add the researched stock to the watch list (idempotent).
-    addReportToWatchlist({
-      ticker: finalTicker,
-      companyName: data.companyName ?? data.company ?? null,
-      intrinsicValueLow: ivLow,
-      intrinsicValueHigh: ivHigh,
-      buyBelow,
-    });
+    // Automatically add researched STOCKS to the watch list (idempotent).
+    // Commodities are excluded: the alert engine would quote "GOLD" as GOLD.AX
+    // (the BetaShares ETF) and compare an ETF share price to per-ounce thresholds.
+    if (autoWatchlist) {
+      addReportToWatchlist({
+        ticker: finalTicker,
+        companyName: data.companyName ?? data.company ?? null,
+        intrinsicValueLow: ivLow,
+        intrinsicValueHigh: ivHigh,
+        buyBelow,
+      });
+    }
 
     // Material-change detection: verdict flip or a fair-value move beyond the
     // threshold versus the previous report. Logged to alert_log so it surfaces
@@ -437,7 +555,7 @@ function saveReportToDB(ticker: string, filePath: string, content: string) {
  */
 function extractReport(raw: string): string {
   // Unwrap a fenced frontmatter block (```yaml\n---\n…\n---\n```) → bare ---…---
-  let text = raw.replace(/```ya?ml\s*\n(---\n[\s\S]*?\n---)\s*\n```/, "$1");
+  const text = raw.replace(/```ya?ml\s*\n(---\n[\s\S]*?\n---)\s*\n```/, "$1");
 
   // Anchor on the real frontmatter: the `---` line immediately before `ticker:`.
   const tickerIdx = text.search(/\nticker:\s/);
@@ -511,21 +629,55 @@ export async function POST(req: NextRequest) {
   try {
     if (type === "stock") {
       const v = await runEquityValuation(asxTicker);
-      valuation = v;
-      valuationContext = formatValuationForPrompt(v);
+      // A degraded run (missing price/shares/earnings base) must not be injected
+      // as the quantitative anchor — its numbers are built on absent inputs.
+      if (v.ok) {
+        valuation = v;
+        valuationContext = formatValuationForPrompt(v);
+      } else {
+        console.error(`[valuation] ${asxTicker} inputs incomplete — model not injected:`, v.warnings);
+      }
     } else {
       const v = await runCommodityValuation(asxTicker);
-      valuation = v;
-      valuationContext = formatCommodityValuationForPrompt(v);
+      // Commodity `ok` only reflects the live-spot fetch; the maintained cost
+      // curve (fair value, zones) is valid regardless — inject when it exists.
+      if (v.codeFairValue > 0) {
+        valuation = v;
+        valuationContext = formatCommodityValuationForPrompt(v);
+      } else {
+        console.error(`[valuation] ${asxTicker} has no maintained cost curve — model not injected:`, v.warnings);
+      }
     }
   } catch (e) {
     console.error("[valuation] engine failed:", e);
   }
 
-  const marketContext =
-    (type === "stock" ? await fetchEquitySnapshot(asxTicker) : await fetchCommoditySpot(asxTicker)) +
-    valuationContext;
-  const prompt = buildPrompt(asxTicker, type, name?.trim(), newsContext, historyContext, marketContext);
+  // Alert thresholds are derived from the code model up-front (LLM output never
+  // moves them; its consensus numbers are archived in the sidecar instead).
+  const codeThresholds = deriveCodeThresholds(valuation);
+
+  let marketContext = "";
+  if (type === "stock") {
+    const f = await getEquityFundamentals(asxTicker); // cached — same fetch the engine used
+    const snapshot = await fetchEquitySnapshot(asxTicker);
+    const technicals = await fetchTechnicalsBlock(asxTicker, f?.priceCurrency ?? "AUD");
+    const historyBlock =
+      valuation?.kind === "equity"
+        ? formatFinancialHistoryForPrompt(valuation.history, f?.financialCurrency ?? f?.priceCurrency ?? "AUD")
+        : "";
+    marketContext = snapshot + historyBlock + technicals + valuationContext;
+  } else {
+    marketContext = (await fetchCommoditySpot(asxTicker)) + valuationContext;
+  }
+
+  // Morningstar lens — only present if the user has imported a snapshot for this
+  // ticker. Pass the live price so we can surface an implied fair value.
+  const morningstarContext =
+    type === "stock"
+      ? formatMorningstarForPrompt(asxTicker, (await getEquityFundamentals(asxTicker))?.price ?? null)
+      : "";
+
+  const prompt = buildPrompt(asxTicker, type, name?.trim(), newsContext, historyContext, marketContext, morningstarContext);
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -652,18 +804,27 @@ export async function POST(req: NextRequest) {
               `modelIntrinsicValueLow: ${valuation.codeIvLow.toFixed(2)}`,
               `modelIntrinsicValueHigh: ${valuation.codeIvHigh.toFixed(2)}`,
               `modelFairValue: ${valuation.codeFairValue.toFixed(2)}`,
+              codeThresholds ? `modelBuyBelow: ${codeThresholds.buyBelow.toFixed(2)}` : null,
+              codeThresholds ? `modelSellAbove: ${codeThresholds.sellAbove.toFixed(2)}` : null,
               divergencePct != null ? `valuationDivergencePct: ${divergencePct.toFixed(1)}` : null,
             ].filter(Boolean).join("\n");
             // Replace any model* lines the LLM may have emitted, then insert ours.
             reportContent = reportContent
-              .replace(/^(modelVersion|modelIntrinsicValueLow|modelIntrinsicValueHigh|modelFairValue|valuationDivergencePct):.*$/gm, "")
+              .replace(/^(modelVersion|modelIntrinsicValueLow|modelIntrinsicValueHigh|modelFairValue|modelBuyBelow|modelSellAbove|valuationDivergencePct):.*$/gm, "")
               .replace(/\n{3,}/g, "\n\n")
               .replace(/^ticker: .*$/m, (m) => `${m}\n${stamp}`);
 
             try {
               saveValuationSidecar(asxTicker, today(), {
                 model: valuation,
-                llm: { intrinsicValueLow: llmLow, intrinsicValueHigh: llmHigh, fairValue: llmFair },
+                llm: {
+                  intrinsicValueLow: llmLow,
+                  intrinsicValueHigh: llmHigh,
+                  fairValue: llmFair,
+                  consensusBuyBelow: typeof fm.consensusBuyBelow === "number" ? fm.consensusBuyBelow : null,
+                  consensusSellAbove: typeof fm.consensusSellAbove === "number" ? fm.consensusSellAbove : null,
+                },
+                dbThresholds: codeThresholds,
                 divergencePct,
                 savedAt: new Date().toISOString(),
               });
@@ -673,7 +834,7 @@ export async function POST(req: NextRequest) {
           }
 
           fs.writeFileSync(filePath, reportContent.trim(), "utf-8");
-          saveReportToDB(asxTicker, filePath, reportContent);
+          saveReportToDB(asxTicker, filePath, reportContent, codeThresholds, type === "stock");
 
           const redirectPath = `/research/${encodeURIComponent(asxTicker)}`;
           controller.enqueue(

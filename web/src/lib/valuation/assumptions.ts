@@ -19,9 +19,17 @@ export const DEFAULTS = {
   terminalGrowth: 0.025,      // ~GDP/inflation
   taxRate: 0.30,              // AU corporate rate (fallback if not derivable)
   costOfDebtFallback: 0.06,
-  stage1Growth: 0.04,        // used only when no analyst estimate is available
-  exitMultipleEbit: 12,      // terminal EV/owner-earnings exit multiple
-  marginOfSafety: 0.30,      // standing 30% MOS (CLAUDE.md)
+  stage1Growth: 0.04,         // FALLBACK only — normally derived from forward vs trailing EPS
+  exitMultiple: 12,           // FALLBACK terminal multiple on owner earnings — normally derived from the quality tier
+  marginOfSafety: 0.30,       // standing 30% MOS (CLAUDE.md)
+  discountRateFloor: 0.08,    // cost-of-equity floor (risk-free + minimum company premium)
+  discountRateCeiling: 0.16,
+  betaFloor: 0.6,             // Yahoo betas can be negative/near-zero on commodity names — never discount below this
+  betaCap: 2.5,
+  stage1GrowthMin: -0.05,     // derived analyst growth is clamped into this band
+  stage1GrowthMax: 0.12,
+  exitMultipleMin: 7,         // tier-derived terminal multiple clamp
+  exitMultipleMax: 15,
 } as const;
 
 export type AssumptionKey = keyof typeof DEFAULTS;
@@ -68,12 +76,15 @@ export function resolveAssumptions(
     const scopeRank: Record<string, number> = { global: 1 };
     if (sector) scopeRank[sector] = 2;
     scopeRank[ticker.toUpperCase()] = 3;
+    // Legacy DB rows may still use the pre-v2 key name.
+    const LEGACY_KEYS: Record<string, string> = { exitMultipleEbit: "exitMultiple" };
     const best: Record<string, { value: number; rank: number; scope: string }> = {};
     for (const r of rows) {
       const rank = scopeRank[r.scope] ?? (r.scope === ticker.toUpperCase() ? 3 : 0);
       if (rank === 0) continue; // not applicable to this ticker
-      if (!best[r.key] || rank >= best[r.key].rank) {
-        best[r.key] = { value: r.value, rank, scope: r.scope };
+      const key = LEGACY_KEYS[r.key] ?? r.key;
+      if (!best[key] || rank >= best[key].rank) {
+        best[key] = { value: r.value, rank, scope: r.scope };
       }
     }
     for (const [k, v] of Object.entries(best)) {

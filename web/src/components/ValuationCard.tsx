@@ -74,7 +74,12 @@ export default function ValuationCard({ sidecar }: { sidecar: ValuationSidecar }
                 <span className="text-zinc-500">Methods:</span> DCF {fmt(m.methods.dcf)} · OE×{m.ownerEarningsMultiple} {fmt(m.methods.ownerEarningsMultiple)} · Graham {fmt(m.methods.graham)} · implied growth {m.methods.impliedGrowth == null ? "n/a" : (m.methods.impliedGrowth * 100).toFixed(1) + "%"}
               </p>
               <p>
-                <span className="text-zinc-500">Drivers:</span> WACC {(m.wacc * 100).toFixed(1)}% · quality {m.qualityTier} · {m.baseBasis}
+                {/* dcf-v1 sidecars stored `wacc`; v2 stores the CAPM cost of equity as `discountRate`. */}
+                <span className="text-zinc-500">Drivers:</span> discount rate{" "}
+                {(((m as unknown as { discountRate?: number; wacc?: number }).discountRate ??
+                  (m as unknown as { wacc?: number }).wacc ??
+                  0) * 100).toFixed(1)}
+                % · quality {m.qualityTier} · {m.baseBasis}
               </p>
             </>
           )}

@@ -134,15 +134,15 @@ marginOfSafety: 12.5    # % discount to midpoint IV at time of report
 
 11. **Bain Competitive Landscape** — Top 4–6 ASX/global peers with market cap and margin comparison table, competitive moat analysis per competitor, market share trend (3yr), SWOT for the top 2 competitors, single best pick rationale, 12-month catalysts.
 
-12. **JPMorgan Earnings Analysis** — Last 4 quarters: EPS vs consensus (beat/miss/inline). Upcoming quarter consensus EPS + revenue estimates. Key metrics the market is watching. Segment revenue breakdown and trends. Management guidance summary from last call. Historical stock reaction after last 4 earnings. Bull/bear scenario price impact.
+12. **JPMorgan Earnings Analysis** — ASX companies report **half-yearly** (H1/FY), not quarterly. Analyse the most recent half-year and full-year results from the provided financial history and news: revenue/earnings trajectory, key metrics the market is watching, segment trends, management guidance. Consensus-estimate history and post-earnings price reactions are only included **when the data is supplied** — never fabricate an EPS-vs-consensus table; if consensus data is unavailable, say so. Bull/bear scenario price impact.
 
 13. **Bridgewater Risk Assessment** — Interest rate sensitivity, inflation sensitivity, recession stress test (estimated drawdown %), liquidity risk, leverage risk, tail risk scenarios (low/medium probability). Hedging considerations.
 
 14. **Harvard Endowment — Dividend Analysis** *(skip if no dividend)* — Current yield, dividend safety score (1–10), consecutive years of growth, payout ratio, 5yr dividend CAGR, DRIP compounding projection (10yr at current yield), sustainability verdict.
 
-15. **Citadel Technical Analysis** — Trend direction (daily / weekly / monthly). Key support and resistance levels. 50/100/200-day MA position and crossover signals. RSI, MACD, Bollinger Band readings (plain English). Volume trend. Chart pattern if present. Ideal entry price, stop-loss, and 12-month technical target. Risk-to-reward ratio. Confidence: Strong Buy / Buy / Neutral / Sell / Strong Sell.
+15. **Citadel Technical Analysis** — All indicator readings (moving averages, RSI, MACD, support/resistance, volume trend) MUST come from the system-computed technicals block provided with the prompt — never estimated or recalled. Interpret those exact readings in plain English: trend direction, MA position and crossovers, momentum, key levels. Ideal entry price, stop-loss, and 12-month technical target. Risk-to-reward ratio. Confidence: Strong Buy / Buy / Neutral / Sell / Strong Sell. If no computed technicals were provided, state that and keep this section qualitative.
 
-16. **Renaissance Quant Patterns** — Seasonal patterns (best/worst months). Correlation with ASX events (RBA meetings, CPI). Insider buying/selling from recent filings. Institutional ownership trend (increasing/decreasing). Short interest and squeeze potential. Pre/post-earnings price behaviour pattern.
+16. **Renaissance Quant Patterns** — Only from supplied data: insider buying/selling, institutional-ownership trends, and short interest are usually NOT available — state "data not available" for each rather than inventing figures. What remains is qualitative: seasonal/behavioural tendencies (clearly framed as general patterns, not measurements), sensitivity to ASX macro events (RBA meetings, CPI), and price behaviour visible in the computed technicals.
 
 17. **McKinsey Macro Context (Australia)** — RBA rate outlook and impact on this stock. Australian inflation and GDP trends. AUD strength impact. Sector rotation signals. Specific macro tailwinds/headwinds for this company. Timeline for macro factors to affect this stock.
 

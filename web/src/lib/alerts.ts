@@ -1,7 +1,8 @@
 import { getDb } from "@/db";
 import { watchlist, alertLog, researchReports } from "@/db/schema";
 import { eq, and, gte, desc } from "drizzle-orm";
-import { getQuotes } from "./yahoo-finance";
+import { getQuotes, getCommoditySpotUsd } from "./yahoo-finance";
+import { COMMODITY_DEFAULTS, normaliseCommodity } from "./valuation/commodity";
 
 export type Alert = {
   ticker: string;
@@ -53,9 +54,20 @@ export async function checkAlerts(): Promise<Alert[]> {
     if (!(r.ticker in reportMap)) reportMap[r.ticker] = r;
   }
 
-  const tickers = items.map((w) => w.ticker);
-  const quotes = await getQuotes(tickers);
+  // Commodity rows (GOLD, OIL, SILVER…) must be priced as USD spot per unit —
+  // quoting them like equities would resolve e.g. "GOLD" to GOLD.AX (the
+  // BetaShares ETF) and compare an ETF share price against per-ounce thresholds.
+  const isCommodity = (t: string) => normaliseCommodity(t) in COMMODITY_DEFAULTS;
+  const equityItems = items.filter((w) => !isCommodity(w.ticker));
+  const commodityItems = items.filter((w) => isCommodity(w.ticker));
+
+  const quotes = await getQuotes(equityItems.map((w) => w.ticker));
   const quoteMap = Object.fromEntries(quotes.map((q) => [q.ticker, q]));
+
+  const spotEntries = await Promise.all(
+    commodityItems.map(async (w) => [w.ticker, await getCommoditySpotUsd(normaliseCommodity(w.ticker))] as const)
+  );
+  const spotMap = Object.fromEntries(spotEntries);
 
   const triggered: Alert[] = [];
 
@@ -73,9 +85,10 @@ export async function checkAlerts(): Promise<Alert[]> {
   };
 
   for (const item of items) {
-    const quote = quoteMap[item.ticker];
-    if (!quote) continue;
-    const currentPrice = quote.lastPrice;
+    const currentPrice = isCommodity(item.ticker)
+      ? spotMap[item.ticker]
+      : quoteMap[item.ticker]?.lastPrice;
+    if (currentPrice == null || currentPrice <= 0) continue;
 
     const report = reportMap[item.ticker];
 
