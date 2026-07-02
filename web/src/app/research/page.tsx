@@ -1,12 +1,18 @@
 import { listReports, readReport } from "@/lib/report-store";
 import { getDb } from "@/db";
 import { researchReports } from "@/db/schema";
+import { getQuote } from "@/lib/yahoo-finance";
 import { desc } from "drizzle-orm";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import RequestResearchButton from "./RequestResearchButton";
+import MorningstarImportButton from "./MorningstarImportButton";
+import RegenerateReportButton from "./RegenerateReportButton";
 import DeleteReportButton from "./DeleteReportButton";
+
+// Metals share the commodity generation path but want the "metal" report type.
+const METALS = new Set(["gold", "silver", "platinum", "palladium"]);
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +23,7 @@ const verdictStyles: Record<string, string> = {
   hold: "bg-blue-900 text-blue-300",
 };
 
-export default function ResearchPage() {
+export default async function ResearchPage() {
   // Merge DB metadata with filesystem reports
   const db = getDb();
   const dbReports = db.select().from(researchReports).orderBy(desc(researchReports.reportDate)).all();
@@ -29,20 +35,52 @@ export default function ResearchPage() {
     ...fsReports.map((r) => r.ticker),
   ]);
 
-  const reportsByTicker = Array.from(allTickers).map((ticker) => {
+  const reportsByTicker = (await Promise.all(Array.from(allTickers).map(async (ticker) => {
     const db = dbReports.filter((r) => r.ticker === ticker)[0];
     const fs = fsReports.filter((r) => r.ticker === ticker)[0];
     const report = fs ? readReport(fs.filePath) : null;
+    // Report type drives regeneration: a `commodity` frontmatter field marks a
+    // commodity/metal report (metals by name); everything else is an equity.
+    const commodity = report?.frontmatter.commodity?.toString().toLowerCase();
+    const type: "stock" | "metal" | "commodity" = !commodity
+      ? "stock"
+      : METALS.has(commodity)
+      ? "metal"
+      : "commodity";
+    const companyName = db?.companyName ?? report?.frontmatter.company ?? report?.frontmatter.companyName ?? null;
+    const intrinsicValueLow = db?.intrinsicValueLow ?? report?.frontmatter.intrinsicValueLow ?? null;
+    const intrinsicValueHigh = db?.intrinsicValueHigh ?? report?.frontmatter.intrinsicValueHigh ?? null;
+
+    // Margin of safety = discount of current price to the top of the IV range,
+    // computed live. The stored frontmatter `marginOfSafety` is unreliable — the
+    // LLM emits it inconsistently as a fraction or a percentage — so we recompute
+    // from IV + live price. We deliberately use `intrinsicValueHigh` (the value
+    // shown on the card) and a price in the SAME currency: live quote for equities,
+    // base-currency spot for commodities (the card's IV is base currency, so using
+    // the AUD spot here would mix units and skew the %).
+    let price: number | null = null;
+    if (commodity) {
+      price =
+        report?.frontmatter.spotPrice ??
+        report?.frontmatter.spotPriceBrent ??
+        report?.frontmatter.spotPriceWTI ??
+        null;
+    } else {
+      try { price = (await getQuote(ticker))?.lastPrice ?? null; } catch {}
+    }
+    const mos = intrinsicValueHigh && price ? ((intrinsicValueHigh - price) / intrinsicValueHigh) * 100 : null;
+
     return {
       ticker,
-      companyName: db?.companyName ?? report?.frontmatter.company ?? null,
+      companyName,
+      type,
       verdict: db?.verdict ?? report?.frontmatter.verdict ?? null,
       reportDate: db?.reportDate ?? fs?.date ?? null,
-      intrinsicValueLow: db?.intrinsicValueLow ?? report?.frontmatter.intrinsicValueLow ?? null,
-      intrinsicValueHigh: db?.intrinsicValueHigh ?? report?.frontmatter.intrinsicValueHigh ?? null,
-      marginOfSafety: db?.marginOfSafety ?? report?.frontmatter.marginOfSafety ?? null,
+      intrinsicValueLow,
+      intrinsicValueHigh,
+      mos,
     };
-  }).sort((a, b) => (b.reportDate ?? "").localeCompare(a.reportDate ?? ""));
+  }))).sort((a, b) => (b.reportDate ?? "").localeCompare(a.reportDate ?? ""));
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -53,6 +91,7 @@ export default function ResearchPage() {
         </div>
         <div className="flex items-center gap-3">
           <Badge className="bg-zinc-800 text-zinc-300">{reportsByTicker.length} reports</Badge>
+          <MorningstarImportButton />
           <RequestResearchButton />
         </div>
       </div>
@@ -87,12 +126,13 @@ export default function ResearchPage() {
                     {r.intrinsicValueLow && r.intrinsicValueHigh && (
                       <span>IV ${r.intrinsicValueLow}–${r.intrinsicValueHigh}</span>
                     )}
-                    {r.marginOfSafety != null && (
-                      <span className={r.marginOfSafety >= 0.3 ? "text-emerald-400" : ""}>
-                        {(r.marginOfSafety * 100).toFixed(0)}% MOS
+                    {r.mos != null && (
+                      <span className={r.mos >= 30 ? "text-emerald-400" : r.mos < 0 ? "text-red-400" : ""}>
+                        {r.mos.toFixed(0)}% MOS
                       </span>
                     )}
                     {r.reportDate && <span className="text-zinc-500">{r.reportDate}</span>}
+                    <RegenerateReportButton ticker={r.ticker} type={r.type} name={r.companyName} />
                     <DeleteReportButton ticker={r.ticker} />
                   </div>
                 </div>

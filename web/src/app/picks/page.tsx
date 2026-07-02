@@ -7,7 +7,6 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import PriceRangeChart, { LensPrice } from "@/components/PriceRangeChart";
-import AnnouncementAlerts from "@/components/AnnouncementAlerts";
 import Link from "next/link";
 
 type ResearchAlert = {
@@ -147,9 +146,6 @@ export default function ActionAlertsPage() {
         <h1 className="text-2xl font-bold">Watch List</h1>
         <p className="text-zinc-400 text-sm mt-1">Research-based buy/sell zones with live price indicators</p>
       </div>
-
-      {/* ── Material Announcement Alerts (high-impact / thesis news) ── */}
-      <AnnouncementAlerts />
 
       {/* ── Research-Based Alerts ── */}
       <section className="space-y-3">

@@ -138,6 +138,25 @@ export const newsItems = sqliteTable("news_items", {
   fetchedAt: text("fetched_at").default(sql`(datetime('now'))`),
 }, (t) => [uniqueIndex("news_items_ticker_url").on(t.ticker, t.url)]);
 
+// Morningstar reference data — periodically imported from a Morningstar portfolio
+// CSV export (the user has a personal subscription but no API entitlement, so the
+// data is pulled by hand and uploaded). One row per (ticker, asOfDate) snapshot so
+// history is preserved; reports use the latest snapshot. Parsing is intentionally
+// tolerant (see lib/morningstar.ts) — the export's columns/format may change.
+export const morningstarData = sqliteTable("morningstar_data", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ticker: text("ticker").notNull(),              // normalised, e.g. "CSL.AX"
+  holdingName: text("holding_name"),             // raw name as exported
+  economicMoat: text("economic_moat"),           // "None" | "Narrow" | "Wide"
+  priceToFairValue: real("price_to_fair_value"), // Morningstar Price/Fair Value ratio
+  starRating: integer("star_rating"),            // 1–5, if the export includes it
+  uncertainty: text("uncertainty"),              // "Low" | "Medium" | … if present
+  capitalAllocation: text("capital_allocation"), // "Poor"|"Standard"|"Exemplary" if present
+  fairValueType: text("fair_value_type"),        // "quantitative" | "analyst" | null (user-noted)
+  asOfDate: text("as_of_date").notNull(),        // ISO date the data reflects (from filename)
+  importedAt: text("imported_at").default(sql`(datetime('now'))`),
+}, (t) => [uniqueIndex("morningstar_data_ticker_asof").on(t.ticker, t.asOfDate)]);
+
 // Per-ticker fetch pointer — drives "fetch everything since the last recorded
 // fetch" so a user who opens the app irregularly never misses news.
 export const newsFetchState = sqliteTable("news_fetch_state", {
