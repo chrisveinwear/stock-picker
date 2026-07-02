@@ -73,7 +73,7 @@ export default async function ReportPage({ params }: { params: Promise<{ ticker:
         </div>
         {displayPrice && (
           <div className="text-right">
-            <p className="text-2xl font-bold">${displayPrice.toLocaleString("en-AU", { maximumFractionDigits: 0 })}{priceUnit ? ` ${priceUnit}` : ""}</p>
+            <p className="text-2xl font-bold">${displayPrice.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{priceUnit ? ` ${priceUnit}` : ""}</p>
             {!isCommodity && quote?.changePercent != null && (
               <p className={`text-sm ${quote.changePercent >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                 {quote.changePercent >= 0 ? "+" : ""}{quote.changePercent.toFixed(2)}% today
@@ -93,7 +93,7 @@ export default async function ReportPage({ params }: { params: Promise<{ ticker:
                   {isCommodity ? "Incentive Price Range" : "Intrinsic Value"}
                 </p>
                 <p className="text-lg font-bold mt-1">
-                  ${ivLow.toLocaleString("en-AU", { maximumFractionDigits: 0 })}–${ivHigh.toLocaleString("en-AU", { maximumFractionDigits: 0 })}
+                  ${ivLow.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}–${ivHigh.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </p>
                 {isCommodity && priceUnit && <p className="text-xs text-zinc-500 mt-0.5">{priceUnit}</p>}
               </CardContent>
@@ -106,7 +106,7 @@ export default async function ReportPage({ params }: { params: Promise<{ ticker:
                   {isCommodity ? "Spot Price" : "Current Price"}
                 </p>
                 <p className="text-lg font-bold mt-1">
-                  ${displayPrice.toLocaleString("en-AU", { maximumFractionDigits: 0 })}
+                  ${displayPrice.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </p>
                 {isCommodity && priceUnit && <p className="text-xs text-zinc-500 mt-0.5">{priceUnit}</p>}
               </CardContent>
