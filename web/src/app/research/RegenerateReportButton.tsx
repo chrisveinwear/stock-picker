@@ -2,6 +2,7 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { MODEL_OPTIONS, providerRunningLabel, type ReportProvider } from "./model-options";
 
 type ReportType = "stock" | "metal" | "commodity";
 
@@ -9,7 +10,8 @@ type ReportType = "stock" | "metal" | "commodity";
  * Per-card "Regenerate" button. Re-runs the same streaming generation flow as
  * RequestResearchButton, but pre-filled from the existing report (ticker/type/
  * name), so a report can be refreshed in place (e.g. to pick up newly imported
- * Morningstar data or a fresh valuation). Lives inside a card <Link>, so all
+ * Morningstar data or a fresh valuation). Clicking opens a model chooser first;
+ * picking a model starts generation. Lives inside a card <Link>, so all
  * handlers stop propagation to avoid navigating.
  */
 export default function RegenerateReportButton({
@@ -23,16 +25,25 @@ export default function RegenerateReportButton({
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [started, setStarted] = useState(false);
+  const [provider, setProvider] = useState<ReportProvider>("auto");
   const [generating, setGenerating] = useState(false);
   const [streamText, setStreamText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  async function handleRegenerate(e: React.MouseEvent) {
+  function handleOpen(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-
     setOpen(true);
+    setStarted(false);
+    setStreamText("");
+    setError(null);
+  }
+
+  async function handleRegenerate(chosen: ReportProvider) {
+    setProvider(chosen);
+    setStarted(true);
     setGenerating(true);
     setStreamText("");
     setError(null);
@@ -41,7 +52,7 @@ export default function RegenerateReportButton({
       const res = await fetch("/api/research/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticker, type, name: name?.trim() || undefined }),
+        body: JSON.stringify({ ticker, type, name: name?.trim() || undefined, provider: chosen }),
       });
 
       if (!res.ok) {
@@ -102,14 +113,55 @@ export default function RegenerateReportButton({
   return (
     <>
       <button
-        onClick={handleRegenerate}
+        onClick={handleOpen}
         className="text-xs text-zinc-600 hover:text-emerald-400 transition-colors"
         title="Regenerate this report with the latest data"
       >
         ↻ Regenerate
       </button>
 
-      {open && (
+      {open && !started && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setOpen(false);
+          }}
+        >
+          <div
+            className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-md space-y-4 shadow-xl"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          >
+            <div>
+              <h2 className="text-lg font-semibold">Regenerate {ticker}</h2>
+              <p className="text-zinc-400 text-sm mt-1">Pick the AI model to rewrite this report with the latest data.</p>
+            </div>
+            <div className="space-y-2">
+              {MODEL_OPTIONS.map((m) => (
+                <button
+                  key={m.value}
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRegenerate(m.value); }}
+                  className="w-full text-left px-4 py-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition-colors"
+                >
+                  <span className="text-sm font-medium text-zinc-100">{m.label}</span>
+                  <span className="block text-xs text-zinc-500 mt-0.5">{m.detail}</span>
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-end">
+              <button
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(false); }}
+                className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {open && started && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
           onClick={(e) => {
@@ -130,7 +182,7 @@ export default function RegenerateReportButton({
                 <p className="text-xs text-zinc-500 mt-0.5">
                   {isDone
                     ? "Saved — redirecting to report page"
-                    : `claude-opus-4-8 · ${ticker} · ${type}`}
+                    : `${providerRunningLabel(provider)} · ${ticker} · ${type}`}
                 </p>
               </div>
               {!generating && (

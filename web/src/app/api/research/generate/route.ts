@@ -1,10 +1,11 @@
 /**
- * Research report generation via the Claude Code CLI subprocess.
- * Requires the CLI to be authenticated — run the one-time login command:
- *   "/Users/christophermccallum/Library/Application Support/Claude/claude-code/2.1.181/claude.app/Contents/MacOS/claude" login
+ * Research report generation. Providers (see lib/ai/report-providers):
+ *  - "claude" (default within "auto"): the Claude Code CLI subprocess. Requires
+ *    the one-time login: `"$CLAUDE_BINARY" login`
+ *  - "nemotron": OpenRouter free Nemotron endpoint (OPENROUTER_API_KEY)
+ *  - "auto": Claude first, Nemotron when Claude is unavailable/out of credits
  */
 import { NextRequest } from "next/server";
-import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import matter from "gray-matter";
@@ -30,28 +31,20 @@ import {
   getPreviousReport,
   detectMaterialChange,
 } from "@/lib/report-history";
+import {
+  claudeAvailable,
+  generateWithClaudeCli,
+  generateWithOpenRouter,
+  inlineReferenceDoc,
+  OPENROUTER_MODEL,
+  type GenerationResult,
+  type ReportProvider,
+} from "@/lib/ai/report-providers";
 
-export const maxDuration = 300;
-
-function resolveClaudeBinary(): string {
-  // Prefer the symlink on PATH (stays current across updates)
-  const onPath = "/Users/christophermccallum/.local/bin/claude";
-  if (fs.existsSync(onPath)) return onPath;
-
-  // Fall back to the latest versioned bundle under the Claude app directory
-  const base = "/Users/christophermccallum/Library/Application Support/Claude/claude-code";
-  if (fs.existsSync(base)) {
-    const versions = fs.readdirSync(base).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-    for (const v of versions.reverse()) {
-      const candidate = `${base}/${v}/claude.app/Contents/MacOS/claude`;
-      if (fs.existsSync(candidate)) return candidate;
-    }
-  }
-
-  return onPath; // will fail gracefully with "not found" error below
-}
-
-const CLAUDE_BINARY = resolveClaudeBinary();
+// Generous ceiling for the slow free Nemotron endpoint (only enforced on
+// serverless platforms; harmless self-hosted). The OpenRouter client aborts
+// itself at 14 min / 3 min of stall — see lib/ai/report-providers.
+export const maxDuration = 900;
 
 const PROJECT_ROOT = path.join(process.cwd(), "..");
 
@@ -417,7 +410,8 @@ function saveReportToDB(
   filePath: string,
   content: string,
   codeThresholds: CodeThresholds | null,
-  autoWatchlist: boolean
+  autoWatchlist: boolean,
+  generatedBy: string
 ) {
   try {
     const { data } = matter(content);
@@ -492,7 +486,7 @@ function saveReportToDB(
         buyBelow,
         sellAbove,
         filePath,
-        generatedBy: "claude-code",
+        generatedBy,
       })
       .run();
 
@@ -591,10 +585,11 @@ function extractReport(raw: string): string {
 }
 
 export async function POST(req: NextRequest) {
-  const { ticker, type, name } = (await req.json()) as {
+  const { ticker, type, name, provider = "auto" } = (await req.json()) as {
     ticker: string;
     type: "stock" | "metal" | "commodity";
     name?: string;
+    provider?: ReportProvider;
   };
 
   if (!ticker) {
@@ -604,9 +599,19 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  if (!fs.existsSync(CLAUDE_BINARY)) {
+  // Providers to try, in order. "auto" = Claude with Nemotron as the fallback.
+  const providerChain: Exclude<ReportProvider, "auto">[] =
+    provider === "auto" ? ["claude", "nemotron"] : [provider];
+
+  if (provider === "claude" && !claudeAvailable()) {
     return new Response(
-      JSON.stringify({ error: `Claude CLI not found at ${CLAUDE_BINARY}` }),
+      JSON.stringify({ error: "Claude CLI not found — install/login the Claude Code CLI or pick another model" }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
+  }
+  if (provider === "nemotron" && !process.env.OPENROUTER_API_KEY) {
+    return new Response(
+      JSON.stringify({ error: "OPENROUTER_API_KEY is not set in web/.env.local — add it to use the Nemotron model" }),
       { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
@@ -682,95 +687,42 @@ export async function POST(req: NextRequest) {
 
   const stream = new ReadableStream({
     start(controller) {
-      let fullOutput = "";
+      const emit = (text: string) => controller.enqueue(encoder.encode(text));
 
-      const child = spawn(
-        CLAUDE_BINARY,
-        [
-          "--output-format", "stream-json",
-          "--verbose",
-          "--dangerously-skip-permissions",
-          "--print",
-          prompt,
-        ],
-        {
-          cwd: PROJECT_ROOT,
-          env: { ...process.env, HOME: process.env.HOME ?? "/Users/christophermccallum" },
-        }
-      );
+      (async () => {
+        let result: GenerationResult | null = null;
 
-      let jsonBuf = "";
-      child.stdout.on("data", (chunk: Buffer) => {
-        jsonBuf += chunk.toString();
-        const lines = jsonBuf.split("\n");
-        jsonBuf = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const event = JSON.parse(line);
-            if (event.type === "assistant") {
-              for (const block of event.message?.content ?? []) {
-                if (block.type === "text" && block.text) {
-                  fullOutput += block.text;
-                  controller.enqueue(encoder.encode(block.text));
-                }
-              }
-            }
-            if (event.type === "result" && event.result) {
-              if (fullOutput.trim() === "") {
-                fullOutput = event.result;
-                controller.enqueue(encoder.encode(event.result));
-              }
-            }
-          } catch {
-            // not valid JSON, skip
+        for (let i = 0; i < providerChain.length; i++) {
+          const p = providerChain[i];
+          // API models can't read CLAUDE.md/COMMODITIES.md from disk — inline it.
+          const providerPrompt = p === "nemotron" ? inlineReferenceDoc(prompt, type) : prompt;
+          result =
+            p === "claude"
+              ? await generateWithClaudeCli(providerPrompt, emit)
+              : await generateWithOpenRouter(providerPrompt, emit);
+
+          if (result.ok) break;
+
+          const hasNext = i < providerChain.length - 1;
+          if (result.unavailable && hasNext) {
+            console.error(`[generate] ${p} unavailable — falling back:`, result.error);
+            emit(`\n\n⚠ ${result.error}\n→ Falling back to ${OPENROUTER_MODEL} via OpenRouter…\n\n`);
+            continue;
           }
-        }
-      });
 
-      child.stderr.on("data", (chunk: Buffer) => {
-        console.error("[claude stderr]", chunk.toString());
-      });
-
-      child.on("error", (err) => {
-        controller.enqueue(
-          encoder.encode(`\n\n__ERROR__:Failed to start Claude CLI: ${err.message}`)
-        );
-        controller.close();
-      });
-
-      child.on("close", (code) => {
-        // Detect auth failure
-        if (fullOutput.includes("Not logged in") || fullOutput.includes("Please run /login")) {
-          controller.enqueue(
-            encoder.encode(
-              `\n\n__ERROR__:Claude CLI is not authenticated. Run this once in your terminal:\n\n"${CLAUDE_BINARY}" login`
-            )
-          );
+          emit(`\n\n__ERROR__:${result.error}`);
           controller.close();
           return;
         }
 
-        // Detect rate/session limit — otherwise the limit message gets saved as a "report"
-        if (/hit your (usage|session) limit|usage limit reached|rate limit/i.test(fullOutput)) {
-          const resetMatch = fullOutput.match(/resets?[^\n]*/i);
-          const resetHint = resetMatch ? ` (${resetMatch[0].trim()})` : "";
-          controller.enqueue(
-            encoder.encode(
-              `\n\n__ERROR__:Claude CLI usage limit reached${resetHint}. Try again after the limit resets.`
-            )
-          );
+        if (!result?.ok) {
+          emit(`\n\n__ERROR__:No provider produced a report`);
           controller.close();
           return;
         }
 
-        if (code !== 0 && fullOutput.trim() === "") {
-          controller.enqueue(
-            encoder.encode(`\n\n__ERROR__:Claude CLI exited with code ${code}`)
-          );
-          controller.close();
-          return;
-        }
+        const fullOutput = result.output;
+        const generatedBy = result.generatedBy;
 
         try {
           const normTicker = asxTicker.replace(".AX", "").replace(/\s+/g, "_");
@@ -785,6 +737,12 @@ export async function POST(req: NextRequest) {
           let reportContent = /^ticker:.*$/m.test(extracted)
             ? extracted.replace(/^ticker:.*$/m, `ticker: ${asxTicker}`)
             : extracted.replace(/^---\n/, `---\nticker: ${asxTicker}\n`);
+
+          // Record which engine actually wrote the report (system-stamped, never
+          // left to the LLM — with "auto" the UI's choice isn't the whole story).
+          reportContent = reportContent
+            .replace(/^generatedBy:.*\n?/m, "")
+            .replace(/^ticker: .*$/m, (m) => `${m}\ngeneratedBy: ${generatedBy}`);
 
           // Stamp code-authoritative valuation fields into the frontmatter so the
           // model IV, version and divergence are recorded by the system (not left
@@ -834,7 +792,7 @@ export async function POST(req: NextRequest) {
           }
 
           fs.writeFileSync(filePath, reportContent.trim(), "utf-8");
-          saveReportToDB(asxTicker, filePath, reportContent, codeThresholds, type === "stock");
+          saveReportToDB(asxTicker, filePath, reportContent, codeThresholds, type === "stock", generatedBy);
 
           const redirectPath = `/research/${encodeURIComponent(asxTicker)}`;
           controller.enqueue(
@@ -851,7 +809,7 @@ export async function POST(req: NextRequest) {
         }
 
         controller.close();
-      });
+      })();
     },
   });
 

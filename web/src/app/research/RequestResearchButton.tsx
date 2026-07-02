@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MODEL_OPTIONS, providerRunningLabel, type ReportProvider } from "./model-options";
 
 type ReportType = "stock" | "metal" | "commodity";
 
@@ -13,6 +14,7 @@ export default function RequestResearchButton() {
   const [ticker, setTicker] = useState("");
   const [name, setName] = useState("");
   const [type, setType] = useState<ReportType>("stock");
+  const [provider, setProvider] = useState<ReportProvider>("auto");
 
   const [generating, setGenerating] = useState(false);
   const [streamText, setStreamText] = useState("");
@@ -25,6 +27,7 @@ export default function RequestResearchButton() {
     setTicker("");
     setName("");
     setType("stock");
+    setProvider("auto");
     setGenerating(false);
     setStreamText("");
     setError(null);
@@ -41,7 +44,7 @@ export default function RequestResearchButton() {
       const res = await fetch("/api/research/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticker: tickerUpper, type, name: name.trim() || undefined }),
+        body: JSON.stringify({ ticker: tickerUpper, type, name: name.trim() || undefined, provider }),
       });
 
       if (!res.ok) {
@@ -129,7 +132,7 @@ export default function RequestResearchButton() {
               <p className="text-xs text-zinc-500 mt-0.5">
                 {isDone
                   ? "Saved — redirecting to report page"
-                  : `claude-opus-4-8 · ${tickerUpper} · ${type}`}
+                  : `${providerRunningLabel(provider)} · ${tickerUpper} · ${type}`}
               </p>
             </div>
             {!generating && (
@@ -249,6 +252,30 @@ export default function RequestResearchButton() {
             }
             className="bg-zinc-800 border-zinc-700 text-zinc-100"
           />
+        </div>
+
+        {/* Model selector */}
+        <div className="space-y-1.5">
+          <Label className="text-xs text-zinc-400">AI model</Label>
+          <div className="flex gap-2">
+            {MODEL_OPTIONS.map((m) => (
+              <button
+                key={m.value}
+                onClick={() => setProvider(m.value)}
+                title={m.detail}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  provider === m.value
+                    ? "bg-zinc-600 text-zinc-100"
+                    : "bg-zinc-800 text-zinc-400 hover:text-zinc-200"
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] text-zinc-600">
+            {MODEL_OPTIONS.find((m) => m.value === provider)?.detail}
+          </p>
         </div>
 
         {/* Info note */}
