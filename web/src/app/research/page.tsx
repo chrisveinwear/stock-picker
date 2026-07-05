@@ -71,11 +71,16 @@ export default async function ResearchPage() {
     }
     const mos = intrinsicValueHigh && price ? ((intrinsicValueHigh - price) / intrinsicValueHigh) * 100 : null;
 
+    const integrityFlags = Array.isArray(report?.frontmatter.integrityFlags)
+      ? (report.frontmatter.integrityFlags as string[])
+      : [];
+
     return {
       ticker,
       companyName,
       type,
       generatedBy: db?.generatedBy ?? report?.frontmatter.generatedBy ?? null,
+      integrityFlags,
       verdict: db?.verdict ?? report?.frontmatter.verdict ?? null,
       reportDate: db?.reportDate ?? fs?.date ?? null,
       intrinsicValueLow,
@@ -137,6 +142,14 @@ export default async function ResearchPage() {
                           ? "Claude"
                           : String(r.generatedBy).split(":")[0]}
                       </span>
+                    )}
+                    {r.integrityFlags.length > 0 && (
+                      <Badge
+                        className="bg-red-950 text-red-400 text-[10px]"
+                        title={`Integrity validation flagged:\n${r.integrityFlags.join("\n")}`}
+                      >
+                        ⚠ unverified data
+                      </Badge>
                     )}
                   </div>
                   <div className="flex items-center gap-6 text-sm text-zinc-400">

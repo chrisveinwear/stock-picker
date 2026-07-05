@@ -20,7 +20,18 @@ import {
   getPriceHistory,
   type FinancialYear,
 } from "@/lib/yahoo-finance";
-import { computeTechnicals, formatTechnicalsForPrompt } from "@/lib/technicals";
+import {
+  computeTechnicals,
+  formatTechnicalsForPrompt,
+  formatTechnicalsTableMarkdown,
+  spliceTechnicalsTable,
+  type TechnicalReading,
+} from "@/lib/technicals";
+import {
+  validateReportIntegrity,
+  formatViolationsForRetry,
+  type IntegrityViolation,
+} from "@/lib/ai/report-validator";
 import { runEquityValuation, type ValuationResult } from "@/lib/valuation";
 import { formatMorningstarForPrompt } from "@/lib/morningstar";
 import { runCommodityValuation, type CommodityValuationResult } from "@/lib/valuation/commodity";
@@ -148,14 +159,19 @@ Use this table for any multi-year figure in the report (revenue CAGR, margin tre
 ${rows}`;
 }
 
-/** Computed technical indicators for the Citadel lens; "" when history is thin. */
-async function fetchTechnicalsBlock(ticker: string, currency: string): Promise<string> {
+/** Computed technical indicators for the Citadel lens. Returns the prompt
+ *  block plus the raw reading (the integrity validator anchors against it);
+ *  both empty/null when history is thin. */
+async function fetchTechnicalsBlock(
+  ticker: string,
+  currency: string
+): Promise<{ block: string; reading: TechnicalReading | null }> {
   try {
     const daily = await getPriceHistory(ticker, "2y", "1d");
     const t = computeTechnicals(daily);
-    return t ? formatTechnicalsForPrompt(t, currency) : "";
+    return { block: t ? formatTechnicalsForPrompt(t, currency) : "", reading: t };
   } catch {
-    return "";
+    return { block: "", reading: null };
   }
 }
 
@@ -662,15 +678,21 @@ export async function POST(req: NextRequest) {
   const codeThresholds = deriveCodeThresholds(valuation);
 
   let marketContext = "";
+  let technicalsReading: TechnicalReading | null = null;
+  let livePrice: number | null = null;
+  let priceCurrency = "AUD";
   if (type === "stock") {
     const f = await getEquityFundamentals(asxTicker); // cached — same fetch the engine used
+    livePrice = f?.price ?? null;
+    priceCurrency = f?.priceCurrency ?? "AUD";
     const snapshot = await fetchEquitySnapshot(asxTicker);
     const technicals = await fetchTechnicalsBlock(asxTicker, f?.priceCurrency ?? "AUD");
+    technicalsReading = technicals.reading;
     const historyBlock =
       valuation?.kind === "equity"
         ? formatFinancialHistoryForPrompt(valuation.history, f?.financialCurrency ?? f?.priceCurrency ?? "AUD")
         : "";
-    marketContext = snapshot + historyBlock + technicals + valuationContext;
+    marketContext = snapshot + historyBlock + technicals.block + valuationContext;
   } else {
     marketContext = (await fetchCommoditySpot(asxTicker)) + valuationContext;
   }
@@ -690,37 +712,72 @@ export async function POST(req: NextRequest) {
       const emit = (text: string) => controller.enqueue(encoder.encode(text));
 
       (async () => {
-        let result: GenerationResult | null = null;
+        // Run the provider chain once for a given prompt; returns a successful
+        // result, or null after emitting the terminal error itself.
+        type SuccessResult = Extract<GenerationResult, { ok: true }>;
+        const runChain = async (basePrompt: string): Promise<SuccessResult | null> => {
+          let result: GenerationResult | null = null;
+          for (let i = 0; i < providerChain.length; i++) {
+            const p = providerChain[i];
+            // API models can't read CLAUDE.md/COMMODITIES.md from disk — inline it.
+            const providerPrompt = p === "nemotron" ? inlineReferenceDoc(basePrompt, type) : basePrompt;
+            result =
+              p === "claude"
+                ? await generateWithClaudeCli(providerPrompt, emit)
+                : await generateWithOpenRouter(providerPrompt, emit);
 
-        for (let i = 0; i < providerChain.length; i++) {
-          const p = providerChain[i];
-          // API models can't read CLAUDE.md/COMMODITIES.md from disk — inline it.
-          const providerPrompt = p === "nemotron" ? inlineReferenceDoc(prompt, type) : prompt;
-          result =
-            p === "claude"
-              ? await generateWithClaudeCli(providerPrompt, emit)
-              : await generateWithOpenRouter(providerPrompt, emit);
+            if (result.ok) return result;
 
-          if (result.ok) break;
+            const hasNext = i < providerChain.length - 1;
+            if (result.unavailable && hasNext) {
+              console.error(`[generate] ${p} unavailable — falling back:`, result.error);
+              emit(`\n\n⚠ ${result.error}\n→ Falling back to ${OPENROUTER_MODEL} via OpenRouter…\n\n`);
+              continue;
+            }
 
-          const hasNext = i < providerChain.length - 1;
-          if (result.unavailable && hasNext) {
-            console.error(`[generate] ${p} unavailable — falling back:`, result.error);
-            emit(`\n\n⚠ ${result.error}\n→ Falling back to ${OPENROUTER_MODEL} via OpenRouter…\n\n`);
-            continue;
+            emit(`\n\n__ERROR__:${result.error}`);
+            controller.close();
+            return null;
           }
-
-          emit(`\n\n__ERROR__:${result.error}`);
-          controller.close();
-          return;
-        }
-
-        if (!result?.ok) {
           emit(`\n\n__ERROR__:No provider produced a report`);
           controller.close();
-          return;
+          return null;
+        };
+
+        // Generate → validate integrity in code → on fabrication errors,
+        // regenerate ONCE with the violations spelled out; if they persist,
+        // save anyway with visible integrityFlags (never silently publish).
+        const MAX_GEN_PASSES = 2;
+        let result: SuccessResult | null = null;
+        let violations: IntegrityViolation[] = [];
+        for (let pass = 1; pass <= MAX_GEN_PASSES; pass++) {
+          const passPrompt = pass === 1 ? prompt : prompt + formatViolationsForRetry(violations);
+          result = await runChain(passPrompt);
+          if (!result) return; // terminal error already emitted
+
+          // Validate the extracted report (frontmatter unfenced, narration
+          // stripped) — the same content that will be persisted.
+          violations = validateReportIntegrity(extractReport(result.output), {
+            type,
+            technicals: technicalsReading,
+            price: livePrice,
+          });
+          const errors = violations.filter((v) => v.severity === "error");
+          if (errors.length === 0) break;
+
+          console.error(`[integrity] ${asxTicker} pass ${pass} violations:`, errors);
+          if (pass < MAX_GEN_PASSES) {
+            emit(
+              `\n\n⚠ Integrity validation found ${errors.length} fabricated data point(s) — regenerating with corrections…\n\n`
+            );
+          } else {
+            emit(
+              `\n\n⚠ ${errors.length} integrity violation(s) remain after retry — report will be flagged.\n\n`
+            );
+          }
         }
 
+        if (!result?.ok) return;
         const fullOutput = result.output;
         const generatedBy = result.generatedBy;
 
@@ -739,10 +796,25 @@ export async function POST(req: NextRequest) {
             : extracted.replace(/^---\n/, `---\nticker: ${asxTicker}\n`);
 
           // Record which engine actually wrote the report (system-stamped, never
-          // left to the LLM — with "auto" the UI's choice isn't the whole story).
+          // left to the LLM — with "auto" the UI's choice isn't the whole story),
+          // plus any unresolved integrity violations so they surface in the UI.
+          const flagLines = violations.length
+            ? `\nintegrityFlags:\n${violations.map((v) => `  - "${v.severity}: ${v.rule}"`).join("\n")}`
+            : "";
           reportContent = reportContent
             .replace(/^generatedBy:.*\n?/m, "")
-            .replace(/^ticker: .*$/m, (m) => `${m}\ngeneratedBy: ${generatedBy}`);
+            .replace(/^integrityFlags:\n(?:\s+-.*\n?)*/m, "")
+            .replace(/^ticker: .*$/m, (m) => `${m}\ngeneratedBy: ${generatedBy}${flagLines}`);
+
+          // Layer 3: the technical-analysis section's readings table is
+          // rendered in code and spliced in — the LLM never writes those
+          // numbers (its prose interpretation stays, below the table).
+          if (type === "stock" && technicalsReading) {
+            reportContent = spliceTechnicalsTable(
+              reportContent,
+              formatTechnicalsTableMarkdown(technicalsReading, priceCurrency)
+            );
+          }
 
           // Stamp code-authoritative valuation fields into the frontmatter so the
           // model IV, version and divergence are recorded by the system (not left

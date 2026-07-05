@@ -85,6 +85,11 @@ export function generateWithClaudeCli(
         "--output-format", "stream-json",
         "--verbose",
         "--dangerously-skip-permissions",
+        // Reports are print-to-stdout only. Read stays allowed (COMMODITIES.md
+        // reference), but mutating tools are blocked — observed runs otherwise
+        // wander off editing report files themselves (source of reportDate
+        // drift and 20-minute generations).
+        "--disallowedTools", "Write,Edit,NotebookEdit,Bash",
         "--print",
         prompt,
       ],

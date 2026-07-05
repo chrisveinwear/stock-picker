@@ -158,6 +158,8 @@ export function formatTechnicalsForPrompt(t: TechnicalReading, currency: string)
 
 These indicator values were COMPUTED in code from the actual price series. In the technical-analysis section you MUST use these exact readings — do NOT invent, estimate, or "approximate" any indicator value, chart pattern, or volume claim that is not derivable from the figures below.
 
+Do NOT reproduce a table of these raw readings in the technical-analysis section — the system automatically inserts the authoritative readings table at the top of that section when the report is saved. Begin the section directly with your interpretation, referencing these exact values in prose.
+
 - Last close: ${currency} ${n(t.close)} · 3m return ${pct(t.return3mPct)} · 1y return ${pct(t.return1yPct)}
 ${maLine("50-day SMA", t.sma50, t.pctVsSma50)}
 ${maLine("100-day SMA", t.sma100, t.pctVsSma100)}
@@ -168,4 +170,39 @@ ${maLine("200-day SMA", t.sma200, t.pctVsSma200)}
 - 52-week range: ${currency} ${n(t.low52w)} – ${n(t.high52w)}
 - Support (3m/6m closing lows): ${currency} ${n(t.support3m)} / ${n(t.support6m)} · Resistance (3m/6m closing highs): ${currency} ${n(t.resistance3m)} / ${n(t.resistance6m)}
 - Volume: last-month avg daily volume is ${t.volumeRatio1mVs3m == null ? "n/a" : `${n(t.volumeRatio1mVs3m, 2)}x`} the prior-3-month average`;
+}
+
+/** Render the reading as the display table spliced into saved reports — the
+ *  technical-analysis section's numbers come from here, never from the LLM. */
+export function formatTechnicalsTableMarkdown(t: TechnicalReading, currency: string): string {
+  const n = (v: number | null, d = 2) => (v == null ? "n/a" : v.toFixed(d));
+  const pct = (v: number | null) => (v == null ? "n/a" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`);
+  const rows: [string, string][] = [
+    ["Last close", `${currency} ${n(t.close)}`],
+    ["50-day SMA", t.sma50 == null ? "n/a" : `${currency} ${n(t.sma50)} (price ${pct(t.pctVsSma50)} vs it)`],
+    ["100-day SMA", t.sma100 == null ? "n/a" : `${currency} ${n(t.sma100)} (price ${pct(t.pctVsSma100)} vs it)`],
+    ["200-day SMA", t.sma200 == null ? "n/a" : `${currency} ${n(t.sma200)} (price ${pct(t.pctVsSma200)} vs it)`],
+    ["50/200 regime", t.goldenCross == null ? "n/a" : t.goldenCross ? "Golden cross (50 > 200)" : "Death cross (50 < 200)"],
+    ["RSI(14)", n(t.rsi14, 1)],
+    ["MACD(12,26,9)", t.macd ? `line ${n(t.macd.macd, 3)} / signal ${n(t.macd.signal, 3)} / histogram ${n(t.macd.histogram, 3)} → ${t.macd.state}` : "n/a"],
+    ["52-week range", `${currency} ${n(t.low52w)} – ${n(t.high52w)}`],
+    ["Support (3m / 6m)", `${currency} ${n(t.support3m)} / ${n(t.support6m)}`],
+    ["Resistance (3m / 6m)", `${currency} ${n(t.resistance3m)} / ${n(t.resistance6m)}`],
+    ["Returns (3m / 1y)", `${pct(t.return3mPct)} / ${pct(t.return1yPct)}`],
+    ["Volume (1m vs 3m avg)", t.volumeRatio1mVs3m == null ? "n/a" : `${n(t.volumeRatio1mVs3m, 2)}×`],
+  ];
+  return `**System-Computed Technical Readings** *(authoritative, as of ${t.asOf} — inserted in code from daily closes, not model-generated)*
+
+| Indicator | Reading |
+|---|---|
+${rows.map(([k, v]) => `| ${k} | ${v} |`).join("\n")}`;
+}
+
+/** Insert the code-rendered readings table directly under the report's
+ *  technical-analysis heading (section 15). No-op if the heading is missing. */
+export function spliceTechnicalsTable(report: string, tableMarkdown: string): string {
+  const heading = report.match(/^#{2,4}\s*\**\s*15[.)][^\n]*$/m);
+  if (!heading || heading.index == null) return report;
+  const insertAt = heading.index + heading[0].length;
+  return `${report.slice(0, insertAt)}\n\n${tableMarkdown}\n${report.slice(insertAt)}`;
 }
