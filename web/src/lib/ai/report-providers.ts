@@ -164,6 +164,18 @@ export function generateWithClaudeCli(
         return;
       }
 
+      // A clean exit with (near-)empty output is still a failure — observed
+      // overnight: exit 0 with ~nothing on stdout produced a 17-byte stub
+      // report. Report unavailable so "auto" falls through to Nemotron.
+      if (fullOutput.trim().length < 500) {
+        resolve({
+          ok: false,
+          error: `Claude CLI exited ${code ?? 0} but produced no report (${fullOutput.trim().length} chars)`,
+          unavailable: true,
+        });
+        return;
+      }
+
       resolve({ ok: true, output: fullOutput, generatedBy: "claude-code" });
     });
   });

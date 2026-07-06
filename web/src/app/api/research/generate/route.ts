@@ -709,7 +709,33 @@ export async function POST(req: NextRequest) {
 
   const stream = new ReadableStream({
     start(controller) {
-      const emit = (text: string) => controller.enqueue(encoder.encode(text));
+      // Browsers kill long silent streams, so the client may vanish mid-run —
+      // generation and saving must finish headless. enqueue on a closed
+      // controller throws; swallow it and keep going.
+      let clientGone = false;
+      const emit = (text: string) => {
+        if (clientGone) return;
+        try {
+          controller.enqueue(encoder.encode(text));
+        } catch {
+          clientGone = true;
+          console.error("[generate] client disconnected — continuing headless");
+        }
+      };
+      const close = () => {
+        try { controller.close(); } catch { /* already closed */ }
+      };
+
+      // Tool-less Claude runs can stream nothing until the very end (~20 min);
+      // heartbeat dots keep the connection alive through the silence.
+      let lastActivity = Date.now();
+      const trackedEmit = (text: string) => {
+        lastActivity = Date.now();
+        emit(text);
+      };
+      const heartbeat = setInterval(() => {
+        if (Date.now() - lastActivity >= 15_000) emit(" ·");
+      }, 15_000);
 
       (async () => {
         // Run the provider chain once for a given prompt; returns a successful
@@ -723,8 +749,8 @@ export async function POST(req: NextRequest) {
             const providerPrompt = p === "nemotron" ? inlineReferenceDoc(basePrompt, type) : basePrompt;
             result =
               p === "claude"
-                ? await generateWithClaudeCli(providerPrompt, emit)
-                : await generateWithOpenRouter(providerPrompt, emit);
+                ? await generateWithClaudeCli(providerPrompt, trackedEmit)
+                : await generateWithOpenRouter(providerPrompt, trackedEmit);
 
             if (result.ok) return result;
 
@@ -736,11 +762,9 @@ export async function POST(req: NextRequest) {
             }
 
             emit(`\n\n__ERROR__:${result.error}`);
-            controller.close();
             return null;
           }
           emit(`\n\n__ERROR__:No provider produced a report`);
-          controller.close();
           return null;
         };
 
@@ -794,6 +818,22 @@ export async function POST(req: NextRequest) {
           let reportContent = /^ticker:.*$/m.test(extracted)
             ? extracted.replace(/^ticker:.*$/m, `ticker: ${asxTicker}`)
             : extracted.replace(/^---\n/, `---\nticker: ${asxTicker}\n`);
+
+          // Never write a stub: output without a verdict and an IV range is a
+          // failed generation, not a report (a 17-byte file got saved once).
+          try {
+            const { data: check } = matter(reportContent);
+            if (
+              check?.verdict == null ||
+              (check.intrinsicValueLow == null && check.intrinsicValueHigh == null)
+            ) {
+              emit(`\n\n__ERROR__:Generated output is not a valid report (missing verdict/intrinsic value) — nothing saved.`);
+              return;
+            }
+          } catch {
+            emit(`\n\n__ERROR__:Generated output has unparseable frontmatter — nothing saved.`);
+            return;
+          }
 
           // Record which engine actually wrote the report (system-stamped, never
           // left to the LLM — with "auto" the UI's choice isn't the whole story),
@@ -867,21 +907,20 @@ export async function POST(req: NextRequest) {
           saveReportToDB(asxTicker, filePath, reportContent, codeThresholds, type === "stock", generatedBy);
 
           const redirectPath = `/research/${encodeURIComponent(asxTicker)}`;
-          controller.enqueue(
-            encoder.encode(
-              `\n\n__DONE__:${JSON.stringify({ path: redirectPath })}`
-            )
-          );
+          emit(`\n\n__DONE__:${JSON.stringify({ path: redirectPath })}`);
         } catch (saveErr) {
-          controller.enqueue(
-            encoder.encode(
-              `\n\n__ERROR__:Report generated but could not save: ${saveErr}`
-            )
-          );
+          console.error("[generate] save failed:", saveErr);
+          emit(`\n\n__ERROR__:Report generated but could not save: ${saveErr}`);
         }
-
-        controller.close();
-      })();
+      })()
+        .catch((e) => {
+          console.error("[generate] unexpected failure:", e);
+          emit(`\n\n__ERROR__:${e instanceof Error ? e.message : String(e)}`);
+        })
+        .finally(() => {
+          clearInterval(heartbeat);
+          close();
+        });
     },
   });
 
