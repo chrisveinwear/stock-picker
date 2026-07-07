@@ -1,0 +1,65 @@
+{
+  "model": {
+    "kind": "commodity",
+    "modelVersion": "incentive-v1",
+    "ticker": "GOLD",
+    "runAt": "2026-07-07T22:35:52.908Z",
+    "ok": true,
+    "currency": "USD/oz",
+    "price": 4113,
+    "codeFairValue": 2550,
+    "codeIvLow": 1560,
+    "codeIvHigh": 2550,
+    "buyBelow": 2550,
+    "sellAbove": 3315,
+    "verdictZone": "avoid",
+    "spotVsIncentivePct": 61.29411764705882,
+    "costCurve": {
+      "aisc50": 1560,
+      "aisc90": 2075,
+      "incentivePrice": 2550,
+      "thesis": "monetary",
+      "asOf": "2026-07",
+      "source": "S&P Global Mine Cost Outlook Jan-2026 (2025 wtd-avg AISC $1,521); WisdomTree/Bloomberg Aug-2025 median $1,600; 90th & incentive derived (~1.33x / ~1.6x median); new-mine FS decks $2,500+ (Kinross Apr-2026)"
+    },
+    "assumptions": {
+      "aisc50": {
+        "value": 1560,
+        "source": "default"
+      },
+      "aisc90": {
+        "value": 2075,
+        "source": "default"
+      },
+      "incentivePrice": {
+        "value": 2550,
+        "source": "default"
+      },
+      "overvaluedBand": {
+        "value": 0.3,
+        "source": "default"
+      },
+      "mos": {
+        "value": 0.15,
+        "source": "default"
+      }
+    },
+    "warnings": [
+      "Monetary metal trading well above its cost-curve incentive price — the cost model understates value when monetary/safe-haven demand dominates; reconcile against that thesis."
+    ]
+  },
+  "llm": {
+    "intrinsicValueLow": 1560,
+    "intrinsicValueHigh": 2550,
+    "fairValue": 2055,
+    "consensusBuyBelow": 2800,
+    "consensusSellAbove": 3800
+  },
+  "dbThresholds": {
+    "buyBelow": 2550,
+    "sellAbove": 3315,
+    "source": "incentive-v1 incentive zones"
+  },
+  "divergencePct": -19.411764705882355,
+  "savedAt": "2026-07-07T22:46:40.557Z"
+}

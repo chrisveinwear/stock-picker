@@ -1,0 +1,63 @@
+{
+  "model": {
+    "kind": "commodity",
+    "modelVersion": "incentive-v1",
+    "ticker": "COPPER",
+    "runAt": "2026-07-07T23:28:24.697Z",
+    "ok": true,
+    "currency": "USD/lb",
+    "price": 6.171000003814697,
+    "codeFairValue": 5,
+    "codeIvLow": 2.7,
+    "codeIvHigh": 5,
+    "buyBelow": 5,
+    "sellAbove": 6.5,
+    "verdictZone": "hold",
+    "spotVsIncentivePct": 23.420000076293945,
+    "costCurve": {
+      "aisc50": 2.7,
+      "aisc90": 3.55,
+      "incentivePrice": 5,
+      "thesis": "transition",
+      "asOf": "2026-07",
+      "source": "S&P Global Jan-2026 AISC ~269c/lb; 90th derived from 90th-pct C1 ~$3.05 +AISC uplift; greenfield incentive $5.00+ (Goldman Nov-2025 LT $5.22/lb 2025-real; Freeport Apr-2026 brownfield $4.00)"
+    },
+    "assumptions": {
+      "aisc50": {
+        "value": 2.7,
+        "source": "default"
+      },
+      "aisc90": {
+        "value": 3.55,
+        "source": "default"
+      },
+      "incentivePrice": {
+        "value": 5,
+        "source": "default"
+      },
+      "overvaluedBand": {
+        "value": 0.3,
+        "source": "default"
+      },
+      "mos": {
+        "value": 0.2,
+        "source": "default"
+      }
+    },
+    "warnings": []
+  },
+  "llm": {
+    "intrinsicValueLow": 4.5,
+    "intrinsicValueHigh": 5.5,
+    "fairValue": 5,
+    "consensusBuyBelow": 5,
+    "consensusSellAbove": 6.5
+  },
+  "dbThresholds": {
+    "buyBelow": 5,
+    "sellAbove": 6.5,
+    "source": "incentive-v1 incentive zones"
+  },
+  "divergencePct": 0,
+  "savedAt": "2026-07-07T23:40:19.326Z"
+}

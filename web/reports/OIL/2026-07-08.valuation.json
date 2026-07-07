@@ -1,0 +1,63 @@
+{
+  "model": {
+    "kind": "commodity",
+    "modelVersion": "incentive-v1",
+    "ticker": "OIL",
+    "runAt": "2026-07-07T23:12:06.661Z",
+    "ok": true,
+    "currency": "USD/bbl",
+    "price": 72.44000244140625,
+    "codeFairValue": 75,
+    "codeIvLow": 66,
+    "codeIvHigh": 75,
+    "buyBelow": 75,
+    "sellAbove": 101.25,
+    "verdictZone": "watch",
+    "spotVsIncentivePct": -3.413330078125,
+    "costCurve": {
+      "aisc50": 66,
+      "aisc90": 70,
+      "incentivePrice": 75,
+      "thesis": "energy",
+      "asOf": "2026-07",
+      "source": "Dallas Fed Energy Survey Q1-2026: avg new-well breakeven $66 (range $62–70, opex breakeven $43); incentive mid of breakeven→5yr WTI expectation $79"
+    },
+    "assumptions": {
+      "aisc50": {
+        "value": 66,
+        "source": "default"
+      },
+      "aisc90": {
+        "value": 70,
+        "source": "default"
+      },
+      "incentivePrice": {
+        "value": 75,
+        "source": "default"
+      },
+      "overvaluedBand": {
+        "value": 0.35,
+        "source": "default"
+      },
+      "mos": {
+        "value": 0.15,
+        "source": "default"
+      }
+    },
+    "warnings": []
+  },
+  "llm": {
+    "intrinsicValueLow": 66,
+    "intrinsicValueHigh": 75,
+    "fairValue": 70.5,
+    "consensusBuyBelow": 70,
+    "consensusSellAbove": 95
+  },
+  "dbThresholds": {
+    "buyBelow": 75,
+    "sellAbove": 101.25,
+    "source": "incentive-v1 incentive zones"
+  },
+  "divergencePct": -6,
+  "savedAt": "2026-07-07T23:28:05.451Z"
+}
