@@ -12,8 +12,7 @@ import RegenerateReportButton from "./RegenerateReportButton";
 import RegenerateAllButton from "./RegenerateAllButton";
 import DeleteReportButton from "./DeleteReportButton";
 
-// Metals share the commodity generation path but want the "metal" report type.
-const METALS = new Set(["gold", "silver", "platinum", "palladium"]);
+import { METAL_TICKERS as METALS } from "@/lib/metal-tickers";
 
 export const dynamic = "force-dynamic";
 
@@ -38,16 +37,29 @@ export default async function ResearchPage() {
 
   const reportsByTicker = (await Promise.all(Array.from(allTickers).map(async (ticker) => {
     const db = dbReports.filter((r) => r.ticker === ticker)[0];
-    const fs = fsReports.filter((r) => r.ticker === ticker)[0];
-    const report = fs ? readReport(fs.filePath) : null;
+    // Classify from the newest report with REAL frontmatter — error stubs (a
+    // 73-byte 401 message once became GOLD's latest file) carry no `commodity`
+    // field and silently reclassified metals as stocks, so Regenerate then ran
+    // the equity pipeline against the GOLD.AX ETF instead of physical gold.
+    const fsCandidates = fsReports.filter((r) => r.ticker === ticker);
+    const fs = fsCandidates[0];
+    let report = null;
+    for (const candidate of fsCandidates) {
+      const parsed = readReport(candidate.filePath);
+      if (parsed && (parsed.frontmatter.verdict != null || parsed.frontmatter.commodity != null)) {
+        report = parsed;
+        break;
+      }
+    }
     // Report type drives regeneration: a `commodity` frontmatter field marks a
-    // commodity/metal report (metals by name); everything else is an equity.
+    // commodity/metal report; a bare metal-name ticker (GOLD, SILVER…) is a
+    // metal even if no valid report survives; everything else is an equity.
     const commodity = report?.frontmatter.commodity?.toString().toLowerCase();
-    const type: "stock" | "metal" | "commodity" = !commodity
-      ? "stock"
-      : METALS.has(commodity)
+    const type: "stock" | "metal" | "commodity" = commodity
+      ? (METALS.has(commodity) ? "metal" : "commodity")
+      : METALS.has(ticker.toLowerCase())
       ? "metal"
-      : "commodity";
+      : "stock";
     const companyName = db?.companyName ?? report?.frontmatter.company ?? report?.frontmatter.companyName ?? null;
     const intrinsicValueLow = db?.intrinsicValueLow ?? report?.frontmatter.intrinsicValueLow ?? null;
     const intrinsicValueHigh = db?.intrinsicValueHigh ?? report?.frontmatter.intrinsicValueHigh ?? null;

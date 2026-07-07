@@ -13,6 +13,7 @@
  */
 import { getDb } from "@/db";
 import { watchlist, portfolioHoldings, metalHoldings, researchReports } from "@/db/schema";
+import { isMetalTicker } from "@/lib/metal-tickers";
 import { desc } from "drizzle-orm";
 
 export type RefreshType = "stock" | "metal" | "commodity";
@@ -105,14 +106,23 @@ export function buildRefreshTargets(): RefreshTarget[] {
     });
   };
 
-  // Watch list (equities)
+  // Watch list (equities — except legacy metal rows like "GOLD", which must
+  // refresh as commodities, not as the GOLD.AX ETF)
   for (const w of db.select().from(watchlist).all()) {
+    if (isMetalTicker(w.ticker)) {
+      upsert(w.ticker.trim().toUpperCase(), "metal", w.companyName ?? null, "watchlist");
+      continue;
+    }
     if (!isResearchableEquity(w.ticker)) continue;
     upsert(normaliseEquityTicker(w.ticker), "stock", w.companyName ?? null, "watchlist");
   }
 
   // Portfolio holdings (equities) — dedupe across accounts via the ticker key
   for (const h of db.select().from(portfolioHoldings).all()) {
+    if (isMetalTicker(h.ticker)) {
+      upsert(h.ticker.trim().toUpperCase(), "metal", h.companyName ?? null, "portfolio");
+      continue;
+    }
     if (!isResearchableEquity(h.ticker)) continue;
     upsert(normaliseEquityTicker(h.ticker), "stock", h.companyName ?? null, "portfolio");
   }

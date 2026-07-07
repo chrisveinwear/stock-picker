@@ -32,6 +32,7 @@ import {
   formatViolationsForRetry,
   type IntegrityViolation,
 } from "@/lib/ai/report-validator";
+import { isMetalTicker } from "@/lib/metal-tickers";
 import { runEquityValuation, type ValuationResult } from "@/lib/valuation";
 import { formatMorningstarForPrompt } from "@/lib/morningstar";
 import { runCommodityValuation, type CommodityValuationResult } from "@/lib/valuation/commodity";
@@ -601,7 +602,7 @@ function extractReport(raw: string): string {
 }
 
 export async function POST(req: NextRequest) {
-  const { ticker, type, name, provider = "auto" } = (await req.json()) as {
+  const { ticker, type: requestedType, name, provider = "auto" } = (await req.json()) as {
     ticker: string;
     type: "stock" | "metal" | "commodity";
     name?: string;
@@ -633,6 +634,15 @@ export async function POST(req: NextRequest) {
   }
 
   const tickerUpper = ticker.trim().toUpperCase();
+  // A bare metal name always means the physical commodity, never an equity —
+  // as a "stock" it would gain .AX and analyse the GOLD.AX ETF (which
+  // happened: a stub report broke type detection upstream and the pipeline
+  // produced a Perth Mint ETF report titled GOLD).
+  const type: "stock" | "metal" | "commodity" =
+    requestedType === "stock" && isMetalTicker(tickerUpper) ? "metal" : requestedType;
+  if (type !== requestedType) {
+    console.warn(`[generate] ${tickerUpper}: requested type "stock" coerced to "metal"`);
+  }
   const asxTicker =
     type === "stock" && !tickerUpper.includes(".")
       ? `${tickerUpper}.AX`
