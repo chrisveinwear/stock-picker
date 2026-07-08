@@ -11,6 +11,7 @@ import PriceRangeChart from "@/components/PriceRangeChart";
 import FairValueHistoryChart from "@/components/FairValueHistoryChart";
 import ValuationCard from "@/components/ValuationCard";
 import { readValuationSidecar } from "@/lib/valuation/store";
+import { marginOfSafetyPct } from "@/lib/mos";
 
 export const dynamic = "force-dynamic";
 
@@ -52,9 +53,9 @@ export default async function ReportPage({ params }: { params: Promise<{ ticker:
     : (quote?.lastPrice ?? null);
   const priceUnit = isCommodity ? (fm.unit ?? "AUD/oz") : "";
 
-  const mos = ivHigh && displayPrice
-    ? ((ivHigh - displayPrice) / ivHigh) * 100
-    : null;
+  // App-wide MOS convention: % discount to the IV midpoint (see lib/mos.ts) —
+  // matches the report text, which quotes its MOS against the midpoint.
+  const mos = marginOfSafetyPct(ivLow, ivHigh, displayPrice);
 
   return (
     <div className="max-w-3xl space-y-6">

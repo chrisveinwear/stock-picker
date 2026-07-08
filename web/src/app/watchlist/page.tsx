@@ -2,6 +2,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { marginOfSafetyPct } from "@/lib/mos";
 
 type ResearchAlert = {
   watchlistId: number;
@@ -9,6 +10,7 @@ type ResearchAlert = {
   companyName: string | null;
   buyBelow: number;
   sellAbove: number;
+  intrinsicValueLow: number | null;
   intrinsicValueHigh: number | null;
   currentPrice: number | null;
   changePercent: number | null;
@@ -101,8 +103,8 @@ export default function ActionAlertsPage() {
             const price = a.currentPrice ?? 0;
             const target = isBuy ? a.buyBelow : a.sellAbove;
             const mos =
-              isBuy && !a.isCommodity && a.intrinsicValueHigh
-                ? (a.intrinsicValueHigh - price) / a.intrinsicValueHigh
+              isBuy && !a.isCommodity
+                ? marginOfSafetyPct(a.intrinsicValueLow, a.intrinsicValueHigh, price)
                 : null;
             return (
               <div
@@ -137,8 +139,8 @@ export default function ActionAlertsPage() {
                   {mos != null && (
                     <div className="text-right">
                       <p className="text-xs text-zinc-400">MOS</p>
-                      <p className={`font-medium ${mos >= 0.3 ? "text-emerald-400" : "text-amber-400"}`}>
-                        {(mos * 100).toFixed(1)}%
+                      <p className={`font-medium ${mos >= 30 ? "text-emerald-400" : "text-amber-400"}`}>
+                        {mos.toFixed(1)}%
                       </p>
                     </div>
                   )}

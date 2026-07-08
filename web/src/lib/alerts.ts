@@ -3,6 +3,7 @@ import { watchlist, alertLog, researchReports } from "@/db/schema";
 import { eq, and, gte, desc } from "drizzle-orm";
 import { getQuotes, getCommoditySpotUsd } from "./yahoo-finance";
 import { COMMODITY_DEFAULTS, normaliseCommodity } from "./valuation/commodity";
+import { marginOfSafetyPct } from "./mos";
 
 export type Alert = {
   ticker: string;
@@ -10,6 +11,7 @@ export type Alert = {
   currentPrice: number;
   targetPrice: number;
   alertType: "buy_zone" | "sell_zone";
+  /** Percent discount to the IV midpoint (lib/mos.ts convention), e.g. 12.5. */
   marginOfSafety: number | null;
   source: "manual" | "research";
 };
@@ -97,8 +99,11 @@ export async function checkAlerts(): Promise<Alert[]> {
     const buyBelow = report?.buyBelow ?? item.targetBuyPrice;
     if (buyBelow != null && currentPrice <= buyBelow) {
       const fromResearch = report?.buyBelow != null;
-      const ivBase = fromResearch ? report?.intrinsicValueHigh : item.intrinsicValue;
-      const mos = ivBase ? (ivBase - currentPrice) / ivBase : null;
+      // MOS in percent vs the IV midpoint (the watchlist's manual
+      // intrinsicValue is already a single midpoint estimate).
+      const mos = fromResearch
+        ? marginOfSafetyPct(report?.intrinsicValueLow, report?.intrinsicValueHigh, currentPrice)
+        : marginOfSafetyPct(null, item.intrinsicValue, currentPrice);
       recordAlert({
         ticker: item.ticker,
         companyName: item.companyName,

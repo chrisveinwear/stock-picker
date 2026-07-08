@@ -33,6 +33,8 @@ import {
   type IntegrityViolation,
 } from "@/lib/ai/report-validator";
 import { isMetalTicker } from "@/lib/metal-tickers";
+import { marginOfSafetyPct } from "@/lib/mos";
+import { resolveReportThresholds, type ThresholdModel } from "@/lib/report-thresholds";
 import { runEquityValuation, type ValuationResult } from "@/lib/valuation";
 import { formatMorningstarForPrompt } from "@/lib/morningstar";
 import { runCommodityValuation, type CommodityValuationResult } from "@/lib/valuation/commodity";
@@ -395,10 +397,11 @@ ${commodityLensesInstruction}
 Output ONLY the complete markdown report, beginning directly with the YAML frontmatter block delimited by --- lines. Do NOT wrap the frontmatter or any part of the report in code fences (no \`\`\`yaml or \`\`\`markdown). Do NOT use any tools and do NOT save the file yourself — just print the raw markdown report to stdout. No preamble or commentary outside the report.`;
 }
 
-/** Buy/sell alert thresholds derived from the CODE valuation model — the LLM's
- *  lens "consensus" numbers are commentary only and are used as a fallback
- *  solely when the deterministic engine could not produce a value. */
-export type CodeThresholds = { buyBelow: number; sellAbove: number; source: string };
+/** Buy/sell alert thresholds derived from the CODE valuation model. Whether
+ *  they actually reach the DB is decided by resolveReportThresholds at save
+ *  time, which can reject an equity model that flags low confidence or
+ *  diverges too far from the report's own IV range. */
+export type CodeThresholds = ThresholdModel & { source: string };
 
 function deriveCodeThresholds(
   valuation: ValuationResult | CommodityValuationResult | null
@@ -411,6 +414,9 @@ function deriveCodeThresholds(
       buyBelow: valuation.buyBelow,
       sellAbove: valuation.sellAbove,
       source: `${valuation.modelVersion} incentive zones`,
+      kind: "commodity",
+      fairValue: valuation.codeFairValue,
+      lowConfidence: false,
     };
   }
   if (!valuation.ok) return null; // equity model built on missing inputs — don't trust it
@@ -419,6 +425,9 @@ function deriveCodeThresholds(
     buyBelow: valuation.codeFairValue * (1 - mos),
     sellAbove: valuation.codeFairValue * (1 + mos),
     source: `${valuation.modelVersion} fair value ±${(mos * 100).toFixed(0)}% MOS`,
+    kind: "equity",
+    fairValue: valuation.codeFairValue,
+    lowConfidence: valuation.sensitivity.lowConfidence,
   };
 }
 
@@ -428,7 +437,8 @@ function saveReportToDB(
   content: string,
   codeThresholds: CodeThresholds | null,
   autoWatchlist: boolean,
-  generatedBy: string
+  generatedBy: string,
+  livePrice: number | null
 ) {
   try {
     const { data } = matter(content);
@@ -474,22 +484,33 @@ function saveReportToDB(
 
     const ivLow = data.intrinsicValueLow ?? null;
     const ivHigh = data.intrinsicValueHigh ?? null;
-    // Alert thresholds come from the deterministic code model, NOT the LLM's lens
-    // consensus (those numbers are narrative judgment, historically incoherent —
-    // e.g. GOLD thresholds flipping currency between reports). The LLM consensus
-    // is only a fallback when the engine had nothing, with a coherence clamp so a
-    // sell trigger can never sit below the report's own fair-value ceiling.
-    let buyBelow: number | null;
-    let sellAbove: number | null;
-    if (codeThresholds) {
-      buyBelow = Number(codeThresholds.buyBelow.toFixed(2));
-      sellAbove = Number(codeThresholds.sellAbove.toFixed(2));
-    } else {
-      buyBelow = data.consensusBuyBelow ?? null;
-      sellAbove = data.consensusSellAbove ?? null;
-      if (sellAbove != null && ivHigh != null && sellAbove < ivHigh) sellAbove = ivHigh;
-      if (buyBelow != null && ivLow != null && buyBelow > ivLow) buyBelow = ivLow;
+
+    // Alert thresholds: credible code model first, report lens consensus as
+    // fallback, IV coherence clamp for stocks — see lib/report-thresholds.ts
+    // for the full policy.
+    const isCommodityReport = !!data.commodity || codeThresholds?.kind === "commodity";
+    const { buyBelow, sellAbove, modelRejectedReason } = resolveReportThresholds({
+      model: codeThresholds,
+      consensusBuyBelow: data.consensusBuyBelow ?? null,
+      consensusSellAbove: data.consensusSellAbove ?? null,
+      ivLow,
+      ivHigh,
+      isCommodity: isCommodityReport,
+    });
+    if (modelRejectedReason) {
+      console.log(`[thresholds] ${ticker}: ${modelRejectedReason} — using report consensus`);
     }
+
+    // Stored MOS is system-computed to one convention: % discount of the price
+    // to the IV midpoint (per CLAUDE.md). The LLM's frontmatter value is unit-
+    // inconsistent (sometimes fraction, sometimes percent) and only kept as a
+    // last resort when no price is available to compute from.
+    const mosPrice = livePrice ?? (isCommodityReport
+      ? (data.spotPrice ?? data.spotPriceBrent ?? data.spotPriceWTI ?? null)
+      : null);
+    const mosLive = marginOfSafetyPct(ivLow, ivHigh, mosPrice);
+    const marginOfSafety =
+      mosLive != null ? Number(mosLive.toFixed(1)) : data.marginOfSafety ?? null;
 
     db.insert(researchReports)
       .values({
@@ -499,7 +520,7 @@ function saveReportToDB(
         verdict: data.verdict ?? null,
         intrinsicValueLow: ivLow,
         intrinsicValueHigh: ivHigh,
-        marginOfSafety: data.marginOfSafety ?? null,
+        marginOfSafety,
         buyBelow,
         sellAbove,
         filePath,
@@ -914,7 +935,7 @@ export async function POST(req: NextRequest) {
           }
 
           fs.writeFileSync(filePath, reportContent.trim(), "utf-8");
-          saveReportToDB(asxTicker, filePath, reportContent, codeThresholds, type === "stock", generatedBy);
+          saveReportToDB(asxTicker, filePath, reportContent, codeThresholds, type === "stock", generatedBy, livePrice);
 
           const redirectPath = `/research/${encodeURIComponent(asxTicker)}`;
           emit(`\n\n__DONE__:${JSON.stringify({ path: redirectPath })}`);

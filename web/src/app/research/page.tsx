@@ -2,6 +2,7 @@ import { listReports, readReport } from "@/lib/report-store";
 import { getDb } from "@/db";
 import { researchReports } from "@/db/schema";
 import { getQuote } from "@/lib/yahoo-finance";
+import { marginOfSafetyPct } from "@/lib/mos";
 import { desc } from "drizzle-orm";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -64,13 +65,13 @@ export default async function ResearchPage() {
     const intrinsicValueLow = db?.intrinsicValueLow ?? report?.frontmatter.intrinsicValueLow ?? null;
     const intrinsicValueHigh = db?.intrinsicValueHigh ?? report?.frontmatter.intrinsicValueHigh ?? null;
 
-    // Margin of safety = discount of current price to the top of the IV range,
-    // computed live. The stored frontmatter `marginOfSafety` is unreliable — the
-    // LLM emits it inconsistently as a fraction or a percentage — so we recompute
-    // from IV + live price. We deliberately use `intrinsicValueHigh` (the value
-    // shown on the card) and a price in the SAME currency: live quote for equities,
-    // base-currency spot for commodities (the card's IV is base currency, so using
-    // the AUD spot here would mix units and skew the %).
+    // Margin of safety = discount of current price to the IV midpoint (the
+    // app-wide convention in lib/mos.ts, matching CLAUDE.md and the report
+    // text), computed live — the stored frontmatter `marginOfSafety` is
+    // unreliable (the LLM emits it inconsistently as a fraction or a percent).
+    // The price must be in the SAME currency as the IV: live quote for
+    // equities, base-currency spot for commodities (the card's IV is base
+    // currency, so using the AUD spot here would mix units and skew the %).
     let price: number | null = null;
     if (commodity) {
       price =
@@ -81,7 +82,7 @@ export default async function ResearchPage() {
     } else {
       try { price = (await getQuote(ticker))?.lastPrice ?? null; } catch {}
     }
-    const mos = intrinsicValueHigh && price ? ((intrinsicValueHigh - price) / intrinsicValueHigh) * 100 : null;
+    const mos = marginOfSafetyPct(intrinsicValueLow, intrinsicValueHigh, price);
 
     const integrityFlags = Array.isArray(report?.frontmatter.integrityFlags)
       ? (report.frontmatter.integrityFlags as string[])
