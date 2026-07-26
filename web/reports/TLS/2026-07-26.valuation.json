@@ -1,0 +1,242 @@
+{
+  "model": {
+    "kind": "equity",
+    "modelVersion": "dcf-v2",
+    "ticker": "TLS.AX",
+    "runAt": "2026-07-26T06:11:59.252Z",
+    "ok": true,
+    "currency": "AUD",
+    "price": 4.89,
+    "codeIvLow": 2.369584914580822,
+    "codeIvHigh": 6.610507567625827,
+    "codeFairValue": 3.9434863875731367,
+    "discountRate": 0.08,
+    "qualityTier": "solid",
+    "ownerEarningsMultiple": 17,
+    "exitMultiple": 15,
+    "stage1Growth": 0.08979999999999988,
+    "netDebt": 16983000000,
+    "methods": {
+      "dcf": 5.339700442834129,
+      "ownerEarningsMultiple": 3.9434863875731367,
+      "graham": 2.369584914580822,
+      "impliedGrowth": 0.06855901356338029
+    },
+    "analystTargetMean": 5.22286,
+    "baseOwnerEarnings": 2583943068.19806,
+    "baseBasis": "forwardNI=2,427,886,136 · marginNorm=1,932,971,682 · histMedianOE=2,740,000,000 · histMedianFCF=3,191,000,000 -> median 2,583,943,068 AUD",
+    "sensitivity": {
+      "ivLow": 4.534918256090866,
+      "ivHigh": 6.610507567625827,
+      "central": 5.339700442834129,
+      "swingPct": 38.870894233784206,
+      "lowConfidence": true
+    },
+    "assumptions": {
+      "riskFreeRate": {
+        "value": 0.043,
+        "source": "default"
+      },
+      "equityRiskPremium": {
+        "value": 0.055,
+        "source": "default"
+      },
+      "terminalGrowth": {
+        "value": 0.025,
+        "source": "default"
+      },
+      "taxRate": {
+        "value": 0.3,
+        "source": "default"
+      },
+      "costOfDebtFallback": {
+        "value": 0.06,
+        "source": "default"
+      },
+      "stage1Growth": {
+        "value": 0.08979999999999988,
+        "source": "derived",
+        "note": "analyst forward vs trailing EPS, clamped"
+      },
+      "exitMultiple": {
+        "value": 15,
+        "source": "derived",
+        "note": "quality tier \"solid\" multiple, clamped"
+      },
+      "marginOfSafety": {
+        "value": 0.3,
+        "source": "default"
+      },
+      "discountRateFloor": {
+        "value": 0.08,
+        "source": "default"
+      },
+      "discountRateCeiling": {
+        "value": 0.16,
+        "source": "default"
+      },
+      "betaFloor": {
+        "value": 0.6,
+        "source": "default"
+      },
+      "betaCap": {
+        "value": 2.5,
+        "source": "default"
+      },
+      "stage1GrowthMin": {
+        "value": -0.05,
+        "source": "default"
+      },
+      "stage1GrowthMax": {
+        "value": 0.12,
+        "source": "default"
+      },
+      "exitMultipleMin": {
+        "value": 7,
+        "source": "default"
+      },
+      "exitMultipleMax": {
+        "value": 15,
+        "source": "default"
+      }
+    },
+    "inputsProvenance": {
+      "price": {
+        "value": 4.89,
+        "source": "yahoo quote"
+      },
+      "sharesOutstanding": {
+        "value": 11139136247,
+        "source": "yahoo quote"
+      },
+      "beta": {
+        "value": 0.6,
+        "source": "yahoo 0.132 clamped"
+      },
+      "taxRate": {
+        "value": 0.279131806166527,
+        "source": "history median"
+      },
+      "costOfDebt": {
+        "value": 0.03373861991651602,
+        "source": "history median"
+      },
+      "netDebt": {
+        "value": 16983000000,
+        "source": "FTS latest"
+      },
+      "epsTrailing": {
+        "value": 0.2,
+        "source": "yahoo, verified vs price/PE"
+      },
+      "epsForward": {
+        "value": 0.21796,
+        "source": "yahoo, verified vs price/PE"
+      },
+      "baseOwnerEarnings": {
+        "value": 2583943068.19806,
+        "source": "median(forwardNI,marginNorm,histMedianOE,histMedianFCF)"
+      }
+    },
+    "history": [
+      {
+        "date": "2022-06-30",
+        "totalRevenue": 20920000000,
+        "operatingIncome": 2046000000,
+        "ebit": 2930000000,
+        "ebitda": 7288000000,
+        "depreciationAndAmortization": 4358000000,
+        "interestExpense": 449000000,
+        "taxProvision": 667000000,
+        "pretaxIncome": 2481000000,
+        "netIncome": 1688000000,
+        "operatingCashFlow": null,
+        "capitalExpenditure": -3094000000,
+        "freeCashFlow": 4155000000,
+        "totalDebt": 14269000000,
+        "cashAndCashEquivalents": 1040000000,
+        "stockholdersEquity": 15349000000,
+        "ordinarySharesNumber": 11554427353
+      },
+      {
+        "date": "2023-06-30",
+        "totalRevenue": 22365000000,
+        "operatingIncome": 2758000000,
+        "ebit": 3394000000,
+        "ebitda": 7864000000,
+        "depreciationAndAmortization": 4470000000,
+        "interestExpense": 531000000,
+        "taxProvision": 812000000,
+        "pretaxIncome": 2863000000,
+        "netIncome": 1928000000,
+        "operatingCashFlow": null,
+        "capitalExpenditure": -3870000000,
+        "freeCashFlow": 2932000000,
+        "totalDebt": 15866000000,
+        "cashAndCashEquivalents": 932000000,
+        "stockholdersEquity": 15407000000,
+        "ordinarySharesNumber": 11554427353
+      },
+      {
+        "date": "2024-06-30",
+        "totalRevenue": 22537000000,
+        "operatingIncome": 2746000000,
+        "ebit": 3050000000,
+        "ebitda": 7529000000,
+        "depreciationAndAmortization": 4479000000,
+        "interestExpense": 585000000,
+        "taxProvision": 677000000,
+        "pretaxIncome": 2465000000,
+        "netIncome": 1622000000,
+        "operatingCashFlow": null,
+        "capitalExpenditure": -5064000000,
+        "freeCashFlow": 1985000000,
+        "totalDebt": 16968000000,
+        "cashAndCashEquivalents": 1046000000,
+        "stockholdersEquity": 14922000000,
+        "ordinarySharesNumber": 11554427353
+      },
+      {
+        "date": "2025-06-30",
+        "totalRevenue": 22717000000,
+        "operatingIncome": 3312000000,
+        "ebit": 3889000000,
+        "ebitda": 8580000000,
+        "depreciationAndAmortization": 4691000000,
+        "interestExpense": 612000000,
+        "taxProvision": 934000000,
+        "pretaxIncome": 3277000000,
+        "netIncome": 2172000000,
+        "operatingCashFlow": null,
+        "capitalExpenditure": -3874000000,
+        "freeCashFlow": 3450000000,
+        "totalDebt": 17995000000,
+        "cashAndCashEquivalents": 1012000000,
+        "stockholdersEquity": 13899000000,
+        "ordinarySharesNumber": 11385028987
+      }
+    ],
+    "warnings": [
+      "Beta 0.13 outside [0.6, 2.5] — clamped to 0.60.",
+      "Cost of equity 7.6% adjusted to 8.0% (policy band 8–16%).",
+      "IV swings 39% across the sensitivity grid — low confidence; widen margin of safety."
+    ]
+  },
+  "llm": {
+    "intrinsicValueLow": 4,
+    "intrinsicValueHigh": 5.3,
+    "fairValue": 4.65,
+    "consensusBuyBelow": 3.95,
+    "consensusSellAbove": 5.56
+  },
+  "dbThresholds": {
+    "buyBelow": 2.7604404713011954,
+    "sellAbove": 5.126532303845078,
+    "source": "dcf-v2 fair value ±30% MOS",
+    "kind": "equity",
+    "fairValue": 3.9434863875731367,
+    "lowConfidence": true
+  },
+  "divergencePct": 17.91596427600856,
+  "savedAt": "2026-07-26T06:16:11.312Z"
+}
