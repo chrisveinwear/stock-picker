@@ -161,18 +161,21 @@ export function validateReportIntegrity(
   if (technical && ctx.technicals) {
     const t = ctx.technicals;
 
-    if (/\b(?:est\.|estimated?|approx\.?|roughly)\b/i.test(technical) &&
-        /(rsi|sma|moving average|macd|\d+-day)/i.test(technical)) {
-      const offending = technical
-        .split("\n")
-        .filter((l) => /\b(?:est\.|estimated?|approx\.?|roughly)\b/i.test(l) && /(rsi|sma|moving average|macd|\d+-day)/i.test(l));
-      if (offending.length) {
-        violations.push({
-          severity: "error",
-          rule: "estimated-technicals",
-          detail: `Section 15 marks indicator readings as estimates despite a computed technicals block being supplied: ${offending[0].trim().slice(0, 120)}`,
-        });
-      }
+    // Check sentence-by-sentence, not line-by-line: §15 is often one long
+    // prose paragraph, so a trigger word ("roughly") in an unrelated clause
+    // ("roughly midway between support and resistance") would otherwise be
+    // flagged just because an indicator term appears anywhere else on the
+    // same line (RDX/ORA 2026-07 false positives).
+    const sentences = technical.split(/(?<=[.!?])\s+|\n/);
+    const offending = sentences.filter(
+      (s) => /\b(?:est\.|estimated?|approx\.?|roughly)\b/i.test(s) && /(rsi|sma|moving average|macd|\d+-day)/i.test(s)
+    );
+    if (offending.length) {
+      violations.push({
+        severity: "error",
+        rule: "estimated-technicals",
+        detail: `Section 15 marks indicator readings as estimates despite a computed technicals block being supplied: ${offending[0].trim().slice(0, 120)}`,
+      });
     }
 
     // Anchor checks: if the report cites a value for an indicator we computed,
@@ -198,8 +201,16 @@ export function validateReportIntegrity(
   }
 
   // ── Current price must match the injected authoritative price ───────────
+  // Scoped to the VERDICT block (before the first "## " heading) and requires
+  // an explicit price-statement phrase ("current price AUD X" / "trades at
+  // AUD X"), not just the nearest number after any "current price" mention
+  // anywhere in the report — a generic search matched the wrong figure in
+  // "gap to current price: AUD 3.85 vs AUD 5.16" (GNG 2026-07-21), where
+  // 3.85 was the IV midpoint, not the price.
   if (ctx.price != null && ctx.price > 0) {
-    const m = content.match(/(?:current price|last close)[^\n]*?(\d+(?:,\d{3})*(?:\.\d+)?)/i);
+    const verdictEnd = content.search(/^##\s/m);
+    const verdict = verdictEnd === -1 ? content : content.slice(0, verdictEnd);
+    const m = verdict.match(/(?:current price|trades at|last close)\s+(?:of\s+)?(?:AUD|A\$|US\$|USD|\$)?\s*(\d+(?:,\d{3})*(?:\.\d+)?)/i);
     if (m) {
       const cited = Number(m[1].replace(/,/g, ""));
       if (Number.isFinite(cited) && Math.abs(cited - ctx.price) / ctx.price > 0.02) {
