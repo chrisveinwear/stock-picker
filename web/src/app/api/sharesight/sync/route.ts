@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/db";
-import { portfolioHoldings } from "@/db/schema";
+import { portfolioHoldings, fundTransactions } from "@/db/schema";
 import {
   fetchPortfolioPerformance,
   calcAvgCost,
@@ -31,6 +31,13 @@ export async function POST(req: NextRequest) {
     const db = getDb();
     const results: { ticker: string; action: string; shares: number; avgCost: number }[] = [];
 
+    // Ledger-backed holdings (e.g. FSF0581AU) derive units/avg cost from
+    // fund_transactions — Sharesight's numbers lag behind (it has to be
+    // manually refreshed) and would silently clobber the reconciled ledger
+    // values, so skip them here entirely.
+    const ledgerRows = db.selectDistinct({ ticker: fundTransactions.ticker, account: fundTransactions.account }).from(fundTransactions).all();
+    const ledgerKeys = new Set(ledgerRows.map((r) => `${r.ticker}|${r.account}`));
+
     for (const h of perf.holdings) {
       if (EXPIRED_SYMBOLS.has(h.symbol)) continue;
 
@@ -42,6 +49,11 @@ export async function POST(req: NextRequest) {
       // Super fund goes under personal account (it's in the user's Sharesight, not Maxwell's)
       const holdingAccount = isSuper ? "super" : account;
       const manualPrice = isSuper ? h.value / h.quantity : null;
+
+      if (ledgerKeys.has(`${ticker}|${holdingAccount}`)) {
+        results.push({ ticker, action: "skipped (ledger-derived)", shares: h.quantity, avgCost });
+        continue;
+      }
 
       db.insert(portfolioHoldings)
         .values({

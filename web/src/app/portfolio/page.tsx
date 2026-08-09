@@ -37,6 +37,23 @@ type Consensus = {
 type MetalHolding = { id: string; metal: string; ounces: number; avgCostAud: number | null; label: string | null; account: string | null };
 type MetalPrices = { goldAud: number; silverAud: number; audUsd: number };
 
+type FundTransaction = {
+  id: number;
+  ticker: string;
+  type: string;
+  date: string;
+  units: number;
+  unitPrice: number | null;
+  grossAud: number | null;
+  taxAud: number | null;
+  netAud: number | null;
+  avgCostAudAfter: number | null;
+  realizedGainAud: number | null;
+  account: string | null;
+  source: string | null;
+  notes: string | null;
+};
+
 const METAL_SPOT: Record<string, keyof MetalPrices> = { gold: "goldAud", silver: "silverAud" };
 
 const ACCOUNT_LABELS: Record<string, string> = {
@@ -46,6 +63,13 @@ const ACCOUNT_LABELS: Record<string, string> = {
 };
 
 const ACCOUNT_ORDER = ["personal", "super", "maxwell"];
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// Formats an ISO "YYYY-MM-DD" string without going through Date/timezone conversion.
+function formatIsoDate(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return `${d} ${MONTHS[m - 1]} ${y}`;
+}
 
 export default function PortfolioPage() {
   const [holdings, setHoldings] = useState<Holding[]>([]);
@@ -60,13 +84,16 @@ export default function PortfolioPage() {
   const [metals, setMetals] = useState<MetalHolding[]>([]);
   const [metalPrices, setMetalPrices] = useState<MetalPrices | null>(null);
   const [consensus, setConsensus] = useState<Record<string, Consensus>>({});
+  const [fundTransactions, setFundTransactions] = useState<FundTransaction[]>([]);
+  const [showFundHistory, setShowFundHistory] = useState<Record<number, boolean>>({});
 
   async function load() {
-    const [res, metalRes, metalPriceRes, consensusRes] = await Promise.all([
+    const [res, metalRes, metalPriceRes, consensusRes, fundTxRes] = await Promise.all([
       fetch("/api/portfolio"),
       fetch("/api/metals"),
       fetch("/api/metals/prices"),
       fetch("/api/portfolio/consensus"),
+      fetch("/api/portfolio/fund-transactions"),
     ]);
     const data = await res.json();
     setHoldings(data);
@@ -75,6 +102,7 @@ export default function PortfolioPage() {
     if (!mp.error) setMetalPrices(mp);
     const cData = await consensusRes.json();
     if (!cData.error) setConsensus(cData);
+    setFundTransactions(await fundTxRes.json());
 
     const liveHoldings = data.filter((h: Holding) => h.priceType !== "manual");
     if (liveHoldings.length) {
@@ -208,7 +236,7 @@ export default function PortfolioPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Portfolio</h1>
-          <p className="text-zinc-400 text-sm mt-1">All accounts — synced from Sharesight</p>
+          <p className="text-zinc-400 text-sm mt-1">All accounts — Stock market holdings synced from Sharesight</p>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -401,6 +429,17 @@ export default function PortfolioPage() {
                         {h.shares.toLocaleString("en-AU", { maximumFractionDigits: 4 })} units
                         {h.avgCost > 0 ? ` @ $${h.avgCost.toFixed(4)} avg` : ""}
                       </p>
+                      {h.hasLedger && (() => {
+                        const lastDate = fundTransactions
+                          .filter(t => t.ticker === h.ticker && (t.account ?? "personal") === (h.account ?? "personal"))
+                          .reduce<string | null>((max, t) => (!max || t.date > max ? t.date : max), null);
+                        if (!lastDate) return null;
+                        return (
+                          <p className="text-zinc-600 text-[11px] mt-0.5">
+                            Last recorded transaction: {formatIsoDate(lastDate)}
+                          </p>
+                        );
+                      })()}
                       {isManual && (
                         <div className="mt-2 flex items-center gap-2">
                           {editingPrice?.id === h.id ? (
@@ -454,6 +493,57 @@ export default function PortfolioPage() {
                         />
                       </div>
                     )}
+
+                    {h.hasLedger && (() => {
+                      const txs = fundTransactions.filter(t => t.ticker === h.ticker && (t.account ?? "personal") === (h.account ?? "personal"));
+                      if (txs.length === 0) return null;
+                      const open = showFundHistory[h.id];
+                      return (
+                        <div className="mt-3 pt-3 border-t border-zinc-800/60">
+                          <button
+                            type="button"
+                            onClick={() => setShowFundHistory(s => ({ ...s, [h.id]: !s[h.id] }))}
+                            className="text-xs text-zinc-500 hover:text-zinc-300 underline underline-offset-2"
+                          >
+                            {open ? "Hide" : "Show"} transaction history ({txs.length})
+                          </button>
+                          {open && (
+                            <div className="mt-2 overflow-x-auto rounded-lg border border-zinc-800">
+                              <table className="w-full text-xs">
+                                <thead className="bg-zinc-900 text-zinc-500 uppercase tracking-wide">
+                                  <tr>
+                                    <th className="text-left font-medium px-3 py-2">Date</th>
+                                    <th className="text-left font-medium px-3 py-2">Type</th>
+                                    <th className="text-right font-medium px-3 py-2">Units</th>
+                                    <th className="text-right font-medium px-3 py-2">Unit Price</th>
+                                    <th className="text-right font-medium px-3 py-2">Net</th>
+                                    <th className="text-right font-medium px-3 py-2">Avg Cost After</th>
+                                    <th className="text-right font-medium px-3 py-2">Realized G/L</th>
+                                    <th className="text-left font-medium px-3 py-2">Notes</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {txs.map(t => (
+                                    <tr key={t.id} className="border-t border-zinc-800 text-zinc-300">
+                                      <td className="px-3 py-1.5 whitespace-nowrap">{t.date}</td>
+                                      <td className={`px-3 py-1.5 capitalize whitespace-nowrap ${t.units >= 0 ? "text-emerald-400" : "text-red-400"}`}>{t.type.replace(/_/g, " ")}</td>
+                                      <td className="px-3 py-1.5 text-right whitespace-nowrap">{t.units.toLocaleString("en-AU", { maximumFractionDigits: 4 })}</td>
+                                      <td className="px-3 py-1.5 text-right whitespace-nowrap">{t.unitPrice != null ? `$${t.unitPrice.toFixed(4)}` : "—"}</td>
+                                      <td className="px-3 py-1.5 text-right whitespace-nowrap">{t.netAud != null ? `$${t.netAud.toLocaleString("en-AU", { maximumFractionDigits: 2 })}` : "—"}</td>
+                                      <td className="px-3 py-1.5 text-right whitespace-nowrap">{t.avgCostAudAfter != null ? `$${t.avgCostAudAfter.toFixed(6)}` : "—"}</td>
+                                      <td className={`px-3 py-1.5 text-right whitespace-nowrap ${t.realizedGainAud == null ? "" : t.realizedGainAud >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                                        {t.realizedGainAud != null ? `${t.realizedGainAud >= 0 ? "+" : ""}$${t.realizedGainAud.toFixed(2)}` : "—"}
+                                      </td>
+                                      <td className="px-3 py-1.5 text-zinc-500 whitespace-nowrap">{t.notes ?? "—"}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })}
