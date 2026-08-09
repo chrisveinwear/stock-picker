@@ -1,7 +1,8 @@
 import { getDb } from "@/db";
 import { watchlist, portfolioHoldings, stockPicks, researchReports, metalHoldings } from "@/db/schema";
-import { desc, eq } from "drizzle-orm";
+import { desc } from "drizzle-orm";
 import { getQuotes, getMetalPrices } from "@/lib/yahoo-finance";
+import { getResearchAlerts } from "@/lib/research-alerts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import NewsDigestPanel from "@/components/NewsDigestPanel";
@@ -28,9 +29,13 @@ export default async function DashboardPage() {
   const db = getDb();
   const allHoldings  = db.select().from(portfolioHoldings).all();
   const allMetals    = db.select().from(metalHoldings).all();
-  const watchItems   = db.select().from(watchlist).where(eq(watchlist.alertEnabled, true)).all();
   const allWatchItems = db.select().from(watchlist).all();
   const recentReports = db.select().from(researchReports).orderBy(desc(researchReports.createdAt)).limit(5).all();
+  // Headline count = tickers covered (matches the /research page badge), not
+  // the length of the 5-row "recent" preview query.
+  const researchedTickers = new Set(
+    db.select({ ticker: researchReports.ticker }).from(researchReports).all().map((r) => r.ticker)
+  ).size;
   const allPicks     = db.select().from(stockPicks).all();
   const activePicks  = allPicks.filter(p => p.status === "bought");
 
@@ -62,8 +67,12 @@ export default async function DashboardPage() {
   // ── Per-account totals ────────────────────────────────────────────────────
   function equityTotals(account: string) {
     const group = allHoldings.filter(h => (h.account ?? "personal") === account);
-    const value = group.reduce((s, h) => s + priceFor(h) * h.shares, 0);
-    const cost  = group.reduce((s, h) => s + (h.avgCost ?? 0) * h.shares, 0);
+    // A holding with no resolvable price is excluded from BOTH value and cost —
+    // valuing it at $0 while still counting its cost would drag the unrealised
+    // P&L % hard negative whenever a quote fetch fails.
+    const priced = group.filter(h => priceFor(h) > 0);
+    const value = priced.reduce((s, h) => s + priceFor(h) * h.shares, 0);
+    const cost  = priced.reduce((s, h) => s + (h.avgCost ?? 0) * h.shares, 0);
     return { value, cost, pnl: value - cost, count: group.length, holdings: group };
   }
 
@@ -97,18 +106,20 @@ export default async function DashboardPage() {
   const grandPnl   = grandTotal - grandCost;
   const grandPnlPct = grandCost > 0 ? (grandPnl / grandCost) * 100 : 0;
 
-  // Watchlist buy-zone count
-  let buyZoneCount = 0;
-  if (watchItems.length) {
-    try {
-      const wQuotes = await getQuotes(watchItems.map(w => w.ticker));
-      const wMap = Object.fromEntries(wQuotes.map(q => [q.ticker, q]));
-      buyZoneCount = watchItems.filter(w => {
-        const q = wMap[w.ticker];
-        return q && w.targetBuyPrice && q.lastPrice <= w.targetBuyPrice;
-      }).length;
-    } catch {}
-  }
+  // Buy/sell zones from the same source as the Action Alerts page: the latest
+  // research report's thresholds with commodity-aware pricing (lib/research-alerts).
+  // The old dashboard-local check compared live quotes to the watchlist's
+  // targetBuyPrice — a seed frozen at first-report time (CSL's was $244 against
+  // a current buy-below of $98) — and equity-quoted commodities like OIL.
+  let buyZoneItems: string[] = [];
+  let sellZoneItems: string[] = [];
+  try {
+    const zones = await getResearchAlerts();
+    buyZoneItems = zones.filter(a => a.zone === "buy").map(a => a.ticker);
+    sellZoneItems = zones.filter(a => a.zone === "sell").map(a => a.ticker);
+  } catch {}
+  const buyZoneCount = buyZoneItems.length;
+  const alertCount = buyZoneItems.length + sellZoneItems.length;
 
   return (
     <div className="space-y-8 max-w-5xl">
@@ -121,7 +132,7 @@ export default async function DashboardPage() {
         <Link href="/watchlist">
           <div className="rounded-lg border border-emerald-700 bg-emerald-950/40 p-4 hover:bg-emerald-950/60 transition-colors">
             <p className="text-emerald-400 font-semibold text-sm">
-              🟢 {buyZoneCount} stock{buyZoneCount > 1 ? "s" : ""} in buy zone — check watchlist
+              🟢 {buyZoneCount} in buy zone ({buyZoneItems.join(", ")}) — check Action Alerts
             </p>
           </div>
         </Link>
@@ -148,7 +159,7 @@ export default async function DashboardPage() {
             <CardTitle className="text-xs text-zinc-400 font-medium uppercase tracking-wide">Watchlist</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-bold">{watchItems.length}</p>
+            <p className="text-3xl font-bold">{allWatchItems.length}</p>
             <p className={`text-sm mt-1 ${buyZoneCount > 0 ? "text-emerald-400" : "text-zinc-500"}`}>
               {buyZoneCount} in buy zone
             </p>
@@ -160,7 +171,7 @@ export default async function DashboardPage() {
             <CardTitle className="text-xs text-zinc-400 font-medium uppercase tracking-wide">Research Reports</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-bold">{recentReports.length}</p>
+            <p className="text-3xl font-bold">{researchedTickers}</p>
             <p className="text-sm mt-1 text-zinc-500">
               {recentReports[0] ? `Last: ${recentReports[0].ticker}` : "None yet"}
             </p>
@@ -340,7 +351,7 @@ export default async function DashboardPage() {
               <p className={`text-xs uppercase tracking-wide font-medium mb-2 ${buyZoneCount > 0 ? "text-emerald-400" : "text-zinc-500"}`}>🟢 Buy Zone</p>
               <p className="text-3xl font-bold">{buyZoneCount}</p>
               <p className={`text-xs mt-1 ${buyZoneCount > 0 ? "text-emerald-500" : "text-zinc-500"}`}>
-                {buyZoneCount > 0 ? "at or below target price" : "none at target price"}
+                {buyZoneCount > 0 ? "at or below buy price" : "none at buy price"}
               </p>
             </div>
           </Link>
@@ -348,13 +359,14 @@ export default async function DashboardPage() {
           {/* Arrow */}
           <div className="flex items-center text-zinc-600 text-xl px-1 shrink-0">→</div>
 
-          {/* Stage 3 — Action Alerts */}
-          <Link href="/picks" className="flex-1 block">
-            <div className={`h-full rounded-lg border p-4 transition-colors ${allPicks.length > 0 ? "bg-amber-950/30 border-amber-700 hover:border-amber-500" : "bg-zinc-900 border-zinc-700 hover:border-zinc-500"}`}>
-              <p className={`text-xs uppercase tracking-wide font-medium mb-2 ${allPicks.length > 0 ? "text-amber-400" : "text-zinc-500"}`}>🔔 Action Alerts</p>
-              <p className="text-3xl font-bold">{allPicks.length}</p>
-              <p className={`text-xs mt-1 ${allPicks.length > 0 ? "text-amber-500" : "text-zinc-500"}`}>
-                {allPicks.filter(p => p.status === "watching").length} buy · {activePicks.length} held
+          {/* Stage 3 — Action Alerts: live in-zone count from the same source as
+              the Action Alerts page (was the unrelated manual stock_picks count) */}
+          <Link href="/watchlist" className="flex-1 block">
+            <div className={`h-full rounded-lg border p-4 transition-colors ${alertCount > 0 ? "bg-amber-950/30 border-amber-700 hover:border-amber-500" : "bg-zinc-900 border-zinc-700 hover:border-zinc-500"}`}>
+              <p className={`text-xs uppercase tracking-wide font-medium mb-2 ${alertCount > 0 ? "text-amber-400" : "text-zinc-500"}`}>🔔 Action Alerts</p>
+              <p className="text-3xl font-bold">{alertCount}</p>
+              <p className={`text-xs mt-1 ${alertCount > 0 ? "text-amber-500" : "text-zinc-500"}`}>
+                {buyZoneItems.length} buy · {sellZoneItems.length} sell
               </p>
             </div>
           </Link>
@@ -378,7 +390,7 @@ export default async function DashboardPage() {
             ) : (
               <div className="space-y-1">
                 {recentReports.map((r) => (
-                  <Link key={r.id} href={`/research/${r.ticker}`} className="flex items-center justify-between p-2 rounded hover:bg-zinc-800 transition-colors">
+                  <Link key={r.id} href={`/research/${encodeURIComponent(r.ticker)}`} className="flex items-center justify-between p-2 rounded hover:bg-zinc-800 transition-colors">
                     <div>
                       <span className="font-medium text-sm">{r.ticker}</span>
                       {r.companyName && <span className="text-zinc-500 text-xs ml-2">{r.companyName}</span>}

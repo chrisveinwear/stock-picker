@@ -16,6 +16,7 @@ type ImportResult = {
   detectedColumns: Record<string, number>;
   rows: ParsedRow[];
   skipped: { raw: string; reason: string }[];
+  priceWarnings?: string[];
 };
 
 export default function MorningstarImportButton() {
@@ -30,12 +31,23 @@ export default function MorningstarImportButton() {
     setError(null);
     setResult(null);
     try {
-      const csv = await file.text();
-      const res = await fetch("/api/morningstar", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ csv, filename: file.name }),
-      });
+      // .xlsx (e.g. the filled-in download template) is sent as raw bytes and
+      // converted server-side; anything else is read as CSV text.
+      const isXlsx = /\.xlsx$/i.test(file.name);
+      const res = isXlsx
+        ? await fetch("/api/morningstar", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              "X-Filename": file.name,
+            },
+            body: await file.arrayBuffer(),
+          })
+        : await fetch("/api/morningstar", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ csv: await file.text(), filename: file.name }),
+          });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error ?? `HTTP ${res.status}`);
@@ -59,7 +71,7 @@ export default function MorningstarImportButton() {
       <input
         ref={inputRef}
         type="file"
-        accept=".csv,text/csv"
+        accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
@@ -71,9 +83,9 @@ export default function MorningstarImportButton() {
         onClick={() => inputRef.current?.click()}
         disabled={busy}
         className="bg-zinc-700 hover:bg-zinc-600 text-zinc-100 text-sm disabled:opacity-50"
-        title="Upload a Morningstar portfolio CSV export (economic moat + price/fair value)"
+        title="Upload a Morningstar export or the filled-in template — CSV or Excel (economic moat + fair value)"
       >
-        {busy ? "Importing…" : "↑ Import Morningstar CSV"}
+        {busy ? "Importing…" : "↑ Import Morningstar"}
       </Button>
 
       {(result || error) && (
@@ -156,6 +168,15 @@ export default function MorningstarImportButton() {
                       })}
                     </tbody>
                   </table>
+
+                  {result.priceWarnings && result.priceWarnings.length > 0 && (
+                    <p className="text-xs text-amber-400 bg-amber-950/30 rounded-lg p-3">
+                      ⚠ Couldn&apos;t fetch a live price for {result.priceWarnings.join(", ")} — Fair
+                      Value was saved but Price/Fair Value couldn&apos;t be computed. Double-check the
+                      ticker code (ASX codes don&apos;t always match the company&apos;s brand name,
+                      e.g. nib holdings trades as NHF, not NIB).
+                    </p>
+                  )}
 
                   {result.skipped.length > 0 && (
                     <details className="text-xs text-zinc-500">

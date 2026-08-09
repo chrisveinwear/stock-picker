@@ -1,9 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
+import ExcelJS from "exceljs";
 import {
   parseMorningstarCsv,
   saveMorningstarRows,
   getAllLatestMorningstar,
 } from "@/lib/morningstar";
+import { getQuotes } from "@/lib/yahoo-finance";
+
+const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+/** Convert the first worksheet of an .xlsx upload to CSV text so the filled-in
+ *  download template (see ./template) round-trips through the CSV parser. */
+async function xlsxToCsv(buffer: ArrayBuffer): Promise<string> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const sheet = workbook.worksheets[0];
+  if (!sheet) return "";
+
+  const escape = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  const lines: string[] = [];
+  sheet.eachRow({ includeEmpty: false }, (row) => {
+    const cells: string[] = [];
+    for (let c = 1; c <= row.cellCount; c++) {
+      cells.push(escape(row.getCell(c).text ?? ""));
+    }
+    lines.push(cells.join(","));
+  });
+  return lines.join("\n");
+}
 
 export const dynamic = "force-dynamic";
 
@@ -17,9 +41,11 @@ export async function GET() {
 }
 
 /**
- * POST — import a Morningstar portfolio CSV export.
- * Body (JSON): { csv: string, filename?: string, asOf?: string }
- * Or a raw text/csv body. The parser is tolerant of column/format changes.
+ * POST — import a Morningstar portfolio export.
+ * - JSON body: { csv: string, filename?: string, asOf?: string }
+ * - Raw .xlsx body (Content-Type spreadsheetml, filename via X-Filename header)
+ *   — e.g. the filled-in download template; first worksheet is imported.
+ * - Or a raw text/csv body. The parser is tolerant of column/format changes.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -33,6 +59,9 @@ export async function POST(req: NextRequest) {
       csv = body.csv ?? "";
       filename = body.filename;
       asOf = body.asOf;
+    } else if (contentType.includes(XLSX_MIME)) {
+      csv = await xlsxToCsv(await req.arrayBuffer());
+      filename = req.headers.get("x-filename") ?? undefined;
     } else {
       csv = await req.text();
     }
@@ -53,6 +82,27 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Rows that gave a dollar Fair Value instead of a ratio need a live price
+    // to derive Price/Fair Value (price ÷ fair value) before saving. getQuotes
+    // silently drops tickers it can't fetch (invalid/delisted symbols etc.) —
+    // track those so the caller can surface it instead of a silent blank.
+    const needsPrice = result.rows.filter((r) => r.priceToFairValue == null && r.fairValue != null);
+    const priceWarnings: string[] = [];
+    if (needsPrice.length > 0) {
+      const quotes = await getQuotes(needsPrice.map((r) => r.ticker));
+      const priceByTicker = new Map(quotes.map((q) => [q.ticker, q.lastPrice]));
+      for (const row of result.rows) {
+        if (row.priceToFairValue == null && row.fairValue != null) {
+          const price = priceByTicker.get(row.ticker);
+          if (price && price > 0) {
+            row.priceToFairValue = price / row.fairValue;
+          } else {
+            priceWarnings.push(row.ticker);
+          }
+        }
+      }
+    }
+
     const saved = saveMorningstarRows(result.rows, result.asOfDate);
 
     return NextResponse.json({
@@ -61,6 +111,7 @@ export async function POST(req: NextRequest) {
       detectedColumns: result.detectedColumns,
       rows: result.rows,
       skipped: result.skipped,
+      priceWarnings,
     });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

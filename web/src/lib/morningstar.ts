@@ -24,6 +24,10 @@ export interface ParsedMorningstarRow {
   holdingName: string;     // raw name cell
   economicMoat: MoatRating | null;
   priceToFairValue: number | null;
+  /** Dollar fair-value estimate, when the sheet gives that instead of a ratio.
+   *  Not persisted directly — the API route derives priceToFairValue from it
+   *  using the live price before saving. */
+  fairValue: number | null;
   starRating: number | null;
   uncertainty: string | null;
   capitalAllocation: string | null;
@@ -76,9 +80,33 @@ const COLUMN_MATCHERS: { concept: string; needles: string[] }[] = [
   { concept: "name", needles: ["holding name", "holding", "name", "security", "investment"] },
   { concept: "moat", needles: ["economic moat", "moat"] },
   { concept: "pfv", needles: ["price/fair value", "price / fair value", "price/fair", "p/fv", "pfv", "price to fair"] },
+  // Must come after "pfv": a "Price/Fair Value" header also contains the
+  // substring "fair value", so detectHeader's claimed-column tracking is what
+  // stops this from also grabbing that same column.
+  { concept: "fv", needles: ["fair value estimate", "fair value ($)", "fair value"] },
   { concept: "star", needles: ["morningstar rating", "star rating", "rating"] },
   { concept: "uncertainty", needles: ["uncertainty", "fair value uncertainty"] },
   { concept: "capital", needles: ["capital allocation", "stewardship"] },
+];
+
+/**
+ * Columns for the downloadable import template (see /api/morningstar/template).
+ * Every header here MUST be matched by a COLUMN_MATCHERS needle above, so a
+ * filled-in template always round-trips through the parser.
+ */
+export const MORNINGSTAR_TEMPLATE_COLUMNS: {
+  header: string;
+  concept: string;
+  guidance: string;
+  example: string;
+}[] = [
+  { header: "Symbol", concept: "symbol", guidance: "ASX code, with or without .AX (e.g. CSL or CSL.AX)", example: "CSL" },
+  { header: "Holding Name", concept: "name", guidance: "Company name (free text)", example: "CSL Limited" },
+  { header: "Economic Moat", concept: "moat", guidance: "Wide, Narrow or None", example: "Wide" },
+  { header: "Fair Value", concept: "fv", guidance: "Dollar fair-value estimate (e.g. 24.50) — NOT a ratio. The app converts this to a Price/Fair Value ratio automatically using the live market price.", example: "24.50" },
+  { header: "Morningstar Rating", concept: "star", guidance: "Stars 1–5 (a number, e.g. 4)", example: "4" },
+  { header: "Fair Value Uncertainty", concept: "uncertainty", guidance: "Low, Medium, High, Very High or Extreme", example: "Medium" },
+  { header: "Capital Allocation", concept: "capital", guidance: "Exemplary, Standard or Poor", example: "Exemplary" },
 ];
 
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
@@ -88,15 +116,19 @@ function detectHeader(rows: string[][]): { headerIdx: number; cols: Record<strin
   for (let r = 0; r < Math.min(rows.length, 15); r++) {
     const cells = rows[r].map(norm);
     const cols: Record<string, number> = {};
+    const claimed = new Set<number>();
     for (const { concept, needles } of COLUMN_MATCHERS) {
       if (concept in cols) continue;
-      const idx = cells.findIndex((c) => c && needles.some((n) => c.includes(n)));
-      if (idx >= 0) cols[concept] = idx;
+      const idx = cells.findIndex((c, i) => !claimed.has(i) && c && needles.some((n) => c.includes(n)));
+      if (idx >= 0) {
+        cols[concept] = idx;
+        claimed.add(idx);
+      }
     }
     // A valid header must let us identify the row (name or symbol) AND carry at
-    // least one Morningstar datapoint (moat or price/fair-value).
+    // least one Morningstar datapoint (moat, price/fair-value, or fair value).
     const canIdentify = "name" in cols || "symbol" in cols;
-    const hasData = "moat" in cols || "pfv" in cols;
+    const hasData = "moat" in cols || "pfv" in cols || "fv" in cols;
     if (canIdentify && hasData) return { headerIdx: r, cols };
   }
   return null;
@@ -214,9 +246,10 @@ export function parseMorningstarCsv(text: string, opts?: { asOf?: string; filena
 
     const moat = normMoat(at(cells, "moat"));
     const pfv = normNumber(at(cells, "pfv"));
+    const fairValue = normNumber(at(cells, "fv"));
     // Skip rows with no Morningstar coverage at all (ETFs / funds / not-covered).
-    if (moat == null && pfv == null) {
-      skipped.push({ raw, reason: `${ticker}: no moat or price/fair-value (not covered)` });
+    if (moat == null && pfv == null && fairValue == null) {
+      skipped.push({ raw, reason: `${ticker}: no moat, price/fair-value, or fair value (not covered)` });
       continue;
     }
 
@@ -225,6 +258,7 @@ export function parseMorningstarCsv(text: string, opts?: { asOf?: string; filena
       holdingName: nameCell || ticker,
       economicMoat: moat,
       priceToFairValue: pfv,
+      fairValue,
       starRating: normStar(at(cells, "star")),
       uncertainty: isEmpty(at(cells, "uncertainty")) ? null : at(cells, "uncertainty")!.trim(),
       capitalAllocation: isEmpty(at(cells, "capital")) ? null : at(cells, "capital")!.trim(),
@@ -244,11 +278,25 @@ export function saveMorningstarRows(rows: ParsedMorningstarRow[], asOfDate: stri
   const importedAt = new Date().toISOString();
   let n = 0;
   for (const row of rows) {
+    // fairValue (dollar) is a parse-time intermediate only — by the time this
+    // runs the API route has derived priceToFairValue from it, so it's
+    // deliberately excluded from what gets persisted.
+    const values = {
+      ticker: row.ticker,
+      holdingName: row.holdingName,
+      economicMoat: row.economicMoat,
+      priceToFairValue: row.priceToFairValue,
+      starRating: row.starRating,
+      uncertainty: row.uncertainty,
+      capitalAllocation: row.capitalAllocation,
+      asOfDate,
+      importedAt,
+    };
     db.insert(morningstarData)
-      .values({ ...row, asOfDate, importedAt })
+      .values(values)
       .onConflictDoUpdate({
         target: [morningstarData.ticker, morningstarData.asOfDate],
-        set: { ...row, importedAt },
+        set: values,
       })
       .run();
     n++;

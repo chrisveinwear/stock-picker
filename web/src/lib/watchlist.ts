@@ -10,10 +10,13 @@ export type ReportLike = {
 };
 
 /**
- * Add a stock to the watch list from a research report. Idempotent — if the
- * ticker is already on the watch list, the existing row (and any manual edits)
- * is left untouched. The alert engine reads buy/sell thresholds from the report
- * itself, so we only seed sensible standalone fallback values here.
+ * Add or refresh a watch-list row from a research report. The alert engine and
+ * the zone views read thresholds from the latest report itself; the values
+ * seeded here (IV midpoint, buy target) are display/fallback copies — so each
+ * new report REFRESHES them on the existing row, otherwise the dashboard keeps
+ * showing first-report numbers forever (CSL once showed IV $325 against a
+ * current report midpoint of $132.50). Manual fields (whyWatching, sector,
+ * alertEnabled, MOS threshold) are left untouched on update.
  */
 export function addReportToWatchlist(report: ReportLike): void {
   const db = getDb();
@@ -31,6 +34,13 @@ export function addReportToWatchlist(report: ReportLike): void {
       targetBuyPrice: report.buyBelow ?? null,
       whyWatching: "Auto-added from research report",
     })
-    .onConflictDoNothing()
+    .onConflictDoUpdate({
+      target: watchlist.ticker,
+      set: {
+        companyName: report.companyName ?? null,
+        intrinsicValue: iv,
+        targetBuyPrice: report.buyBelow ?? null,
+      },
+    })
     .run();
 }

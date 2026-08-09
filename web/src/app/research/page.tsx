@@ -5,6 +5,7 @@ import { getQuote } from "@/lib/yahoo-finance";
 import { marginOfSafetyPct } from "@/lib/mos";
 import { desc } from "drizzle-orm";
 import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import RequestResearchButton from "./RequestResearchButton";
@@ -111,6 +112,14 @@ export default async function ResearchPage() {
         </div>
         <div className="flex items-center gap-3">
           <Badge className="bg-zinc-800 text-zinc-300">{reportsByTicker.length} reports</Badge>
+          <a
+            href="/api/morningstar/template"
+            download
+            title="Download an Excel template with the columns the Morningstar import expects — fill it in and upload it with Import Morningstar"
+            className={`${buttonVariants({ variant: "outline" })} border-zinc-700 text-zinc-300 text-sm`}
+          >
+            ⤓ Template
+          </a>
           <MorningstarImportButton />
           <RegenerateAllButton
             targets={reportsByTicker.map((r) => ({ ticker: r.ticker, type: r.type, name: r.companyName }))}
