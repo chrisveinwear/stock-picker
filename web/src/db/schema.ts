@@ -80,19 +80,29 @@ export const priceCache = sqliteTable("price_cache", {
   fetchedAt: text("fetched_at").default(sql`(datetime('now'))`),
 });
 
-// Metals holdings — physical gold, silver, platinum, palladium (weight-based, not share-based)
-export const metalHoldings = sqliteTable("metal_holdings", {
+// Metal transactions — physical gold, silver, platinum, palladium (weight-based,
+// not share-based). Current holdings are always derived from this ledger (see
+// lib/metals.ts getMetalPositions) rather than stored as a separate snapshot.
+// Historical Perth Mint / GoldPass gold transactions were bulk-imported from
+// account statements (scripts/import-gold-transactions.ts). ounces is signed
+// (positive = acquired, negative = disposed) so SUM(ounces) per account+metal
+// reconciles to the metal_holdings snapshot for that account+metal.
+export const metalTransactions = sqliteTable("metal_transactions", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  metal: text("metal").notNull(),           // "gold" | "silver" | "platinum" | "palladium"
-  label: text("label"),                     // e.g. "Perth Mint — Unallocated Gold"
-  ounces: real("ounces").notNull(),         // troy ounces held
-  avgCostAud: real("avg_cost_aud"),         // average purchase price per oz in AUD
-  location: text("location"),              // "Perth Mint" | "Home" | etc.
-  storageType: text("storage_type"),       // "unallocated" | "allocated" | "certificate" | "coin"
-  purchaseDate: text("purchase_date"),     // ISO date
+  metal: text("metal").notNull(),              // "gold" | "silver" | "platinum" | "palladium"
+  type: text("type").notNull(),                // "buy" | "sell" | "transfer_in" | "transfer_out"
+  date: text("date").notNull(),                // ISO date "2023-08-13"
+  ounces: real("ounces").notNull(),             // signed troy oz: + acquired, - disposed
+  pricePerOzAud: real("price_per_oz_aud"),      // execution metal price per oz (AUD)
+  feeAud: real("fee_aud"),
+  totalAud: real("total_aud"),                  // signed net cash effect: - for a buy, + for a sell
+  avgCostAudAfter: real("avg_cost_aud_after"),  // running weighted-avg cost/oz immediately after this row
+  realizedGainAud: real("realized_gain_aud"),   // sells only: (price - prior avg cost) * ounces sold
   account: text("account").default("personal"), // "personal" | "maxwell"
+  source: text("source"),                       // "Perth Mint GoldPass" | "Perth Mint Storage"
+  orderId: text("order_id"),
   notes: text("notes"),
-  updatedAt: text("updated_at").default(sql`(datetime('now'))`),
+  createdAt: text("created_at").default(sql`(datetime('now'))`),
 });
 
 // Valuation assumption overrides — layered on top of the git-versioned file

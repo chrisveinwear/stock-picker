@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 type MetalHolding = {
-  id: number;
+  id: string;
   metal: string;
   label: string | null;
   ounces: number;
@@ -15,6 +15,23 @@ type MetalHolding = {
   storageType: string | null;
   purchaseDate: string | null;
   account: string | null;
+  notes: string | null;
+};
+
+type MetalTransaction = {
+  id: number;
+  metal: string;
+  type: string;
+  date: string;
+  ounces: number;
+  pricePerOzAud: number | null;
+  feeAud: number | null;
+  totalAud: number | null;
+  avgCostAudAfter: number | null;
+  realizedGainAud: number | null;
+  account: string | null;
+  source: string | null;
+  orderId: string | null;
   notes: string | null;
 };
 
@@ -35,8 +52,6 @@ type MetalPrices = {
   silverChangePercent: number | null;
   fetchedAt: string;
 };
-
-type PortfolioHolding = { shares: number; avgCost: number; priceType: string; manualPrice: number | null };
 
 const METAL_SPOT: Record<string, keyof MetalPrices> = {
   gold: "goldAud",
@@ -64,72 +79,49 @@ function fmt(n: number, decimals = 2) {
 export default function MetalsPage() {
   const [prices, setPrices]     = useState<MetalPrices | null>(null);
   const [holdings, setHoldings] = useState<MetalHolding[]>([]);
-  const [portfolio, setPortfolio] = useState<PortfolioHolding[]>([]);
   const [loading, setLoading]   = useState(true);
-  const [showAdd, setShowAdd]   = useState(false);
-  const [editing, setEditing]   = useState<MetalHolding | null>(null);
-  const [form, setForm]         = useState({
-    metal: "gold", label: "", ounces: "", avgCostAud: "",
-    location: "Perth Mint", storageType: "unallocated", purchaseDate: "",
-    account: "personal", notes: "",
+  const [transactions, setTransactions] = useState<MetalTransaction[]>([]);
+  const [showHistory, setShowHistory] = useState<Record<string, boolean>>({});
+  const [showAddTx, setShowAddTx] = useState(false);
+  const [txForm, setTxForm] = useState({
+    account: "personal", metal: "gold", type: "buy",
+    date: "", ounces: "", pricePerOzAud: "", feeAud: "0", notes: "",
   });
 
   const load = useCallback(async () => {
-    const [hRes, pRes, portRes] = await Promise.all([
+    const [hRes, pRes, tRes] = await Promise.all([
       fetch("/api/metals"),
       fetch("/api/metals/prices"),
-      fetch("/api/portfolio"),
+      fetch("/api/metals/transactions"),
     ]);
     setHoldings(await hRes.json());
     setPrices(await pRes.json());
-    setPortfolio(await portRes.json());
+    setTransactions(await tRes.json());
     setLoading(false);
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  async function handleAdd(e: React.FormEvent) {
+  async function handleAddTransaction(e: React.FormEvent) {
     e.preventDefault();
-    await fetch("/api/metals", {
+    const payload = {
+      metal: txForm.metal,
+      type: txForm.type,
+      date: txForm.date,
+      ounces: parseFloat(txForm.ounces),
+      pricePerOzAud: parseFloat(txForm.pricePerOzAud) || null,
+      feeAud: parseFloat(txForm.feeAud) || 0,
+      notes: txForm.notes || null,
+    };
+    const url = txForm.account === "maxwell" ? "/api/metals/transactions/maxwell-mirror" : "/api/metals/transactions";
+    await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...form, ounces: parseFloat(form.ounces), avgCostAud: parseFloat(form.avgCostAud) || null }),
+      body: JSON.stringify(txForm.account === "maxwell" ? payload : { ...payload, account: "personal" }),
     });
-    setShowAdd(false);
-    setForm({ metal: "gold", label: "", ounces: "", avgCostAud: "", location: "Perth Mint", storageType: "unallocated", purchaseDate: "", account: "personal", notes: "" });
+    setShowAddTx(false);
+    setTxForm({ account: "personal", metal: "gold", type: "buy", date: "", ounces: "", pricePerOzAud: "", feeAud: "0", notes: "" });
     load();
-  }
-
-  async function handleEdit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!editing) return;
-    await fetch(`/api/metals/${editing.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ounces: parseFloat(form.ounces),
-        avgCostAud: parseFloat(form.avgCostAud) || null,
-        label: form.label, location: form.location,
-        storageType: form.storageType, notes: form.notes,
-      }),
-    });
-    setEditing(null);
-    load();
-  }
-
-  async function handleDelete(id: number) {
-    await fetch(`/api/metals/${id}`, { method: "DELETE" });
-    load();
-  }
-
-  function startEdit(h: MetalHolding) {
-    setEditing(h);
-    setForm({
-      metal: h.metal, label: h.label ?? "", ounces: String(h.ounces),
-      avgCostAud: String(h.avgCostAud ?? ""), location: h.location ?? "",
-      storageType: h.storageType ?? "unallocated", purchaseDate: h.purchaseDate ?? "",
-      account: h.account ?? "personal", notes: h.notes ?? "",
-    });
   }
 
   function spotForMetal(metal: string): number {
@@ -140,16 +132,6 @@ export default function MetalsPage() {
 
   // Totals
   const metalsValue = holdings.reduce((s, h) => s + h.ounces * spotForMetal(h.metal), 0);
-  const metalsCost  = holdings.reduce((s, h) => s + (h.avgCostAud ? h.ounces * h.avgCostAud : 0), 0);
-  const metalsPnl   = metalsValue - metalsCost;
-  const metalsPnlPct = metalsCost > 0 ? (metalsPnl / metalsCost) * 100 : 0;
-
-  // Portfolio weight — equity value (live priceType is handled by portfolio page, here we do a rough sum)
-  const equityValue = portfolio.reduce((s, h) => {
-    if (h.priceType === "manual") return s + (h.manualPrice ?? 0) * h.shares;
-    return s; // live prices not available here — just show metals as standalone figure
-  }, 0);
-  const totalValue = metalsValue; // shown relative, not absolute — portfolio page handles full total
 
   // AUD/USD sensitivity — 5% AUD appreciation lowers gold's AUD price
   const audSensitivity = prices
@@ -175,8 +157,8 @@ export default function MetalsPage() {
           <h1 className="text-2xl font-bold">Metals</h1>
           <p className="text-zinc-400 text-sm mt-1">Physical precious metals holdings</p>
         </div>
-        <Button onClick={() => { setShowAdd(!showAdd); setEditing(null); }} variant="outline" className="border-zinc-700 text-zinc-300">
-          {showAdd ? "Cancel" : "+ Add Holding"}
+        <Button onClick={() => setShowAddTx(!showAddTx)} variant="outline" className="border-zinc-700 text-zinc-300">
+          {showAddTx ? "Cancel" : "+ Add Transaction"}
         </Button>
       </div>
 
@@ -215,15 +197,14 @@ export default function MetalsPage() {
         ))}
       </div>
 
-      {/* Add / Edit form */}
-      {(showAdd || editing) && (
+      {/* Add Transaction form */}
+      {showAddTx && (
         <Card className="bg-zinc-900 border-zinc-800">
           <CardHeader>
-            <CardTitle className="text-sm">{editing ? "Edit Holding" : "Add Metal Holding"}</CardTitle>
+            <CardTitle className="text-sm">Add Transaction</CardTitle>
           </CardHeader>
           <CardContent>
-            <form onSubmit={editing ? handleEdit : handleAdd} className="space-y-4">
-              {/* Portfolio selector — full width, always first */}
+            <form onSubmit={handleAddTransaction} className="space-y-4">
               <div className="space-y-1.5">
                 <Label className="text-xs text-zinc-400 uppercase tracking-wide">Portfolio</Label>
                 <div className="flex gap-2">
@@ -234,9 +215,9 @@ export default function MetalsPage() {
                     <button
                       key={opt.value}
                       type="button"
-                      onClick={() => setForm({ ...form, account: opt.value })}
+                      onClick={() => setTxForm({ ...txForm, account: opt.value })}
                       className={`px-4 py-1.5 rounded-md text-sm font-medium border transition-colors ${
-                        form.account === opt.value
+                        txForm.account === opt.value
                           ? "bg-zinc-700 border-zinc-500 text-zinc-100"
                           : "bg-zinc-800/50 border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600"
                       }`}
@@ -245,13 +226,25 @@ export default function MetalsPage() {
                     </button>
                   ))}
                 </div>
+                {txForm.account === "maxwell" && (
+                  <p className="text-xs text-zinc-500">
+                    Maxwell has no Perth Mint account of his own — this will automatically record an identical mirror transaction in My Holdings (opposite type, same date/oz/price), since both share the one physical balance.
+                  </p>
+                )}
               </div>
 
-              {/* Holding details */}
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 <div className="space-y-1">
+                  <Label className="text-xs text-zinc-400">Type</Label>
+                  <select value={txForm.type} onChange={e => setTxForm({ ...txForm, type: e.target.value })}
+                    className="w-full bg-zinc-800 border border-zinc-700 text-zinc-100 h-8 text-sm rounded px-2">
+                    <option value="buy">Buy</option>
+                    <option value="sell">Sell</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
                   <Label className="text-xs text-zinc-400">Metal</Label>
-                  <select value={form.metal} onChange={e => setForm({ ...form, metal: e.target.value })}
+                  <select value={txForm.metal} onChange={e => setTxForm({ ...txForm, metal: e.target.value })}
                     className="w-full bg-zinc-800 border border-zinc-700 text-zinc-100 h-8 text-sm rounded px-2">
                     <option value="gold">Gold</option>
                     <option value="silver">Silver</option>
@@ -260,60 +253,56 @@ export default function MetalsPage() {
                   </select>
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs text-zinc-400">Label</Label>
-                  <Input value={form.label} onChange={e => setForm({ ...form, label: e.target.value })}
-                    placeholder="Perth Mint — Unallocated Gold"
+                  <Label className="text-xs text-zinc-400">Date</Label>
+                  <Input type="date" required value={txForm.date}
+                    onChange={e => setTxForm({ ...txForm, date: e.target.value })}
                     className="bg-zinc-800 border-zinc-700 text-zinc-100 h-8 text-sm" />
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs text-zinc-400">Troy Ounces (oz t)</Label>
-                  <Input type="number" step="0.0001" required value={form.ounces}
-                    onChange={e => setForm({ ...form, ounces: e.target.value })}
+                  <Input type="number" step="0.00001" required value={txForm.ounces}
+                    onChange={e => setTxForm({ ...txForm, ounces: e.target.value })}
                     className="bg-zinc-800 border-zinc-700 text-zinc-100 h-8 text-sm" />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs text-zinc-400">Avg Cost AUD/oz</Label>
-                  <Input type="number" step="0.01" value={form.avgCostAud}
-                    onChange={e => setForm({ ...form, avgCostAud: e.target.value })}
-                    placeholder="e.g. 3850"
+                  <Label className="text-xs text-zinc-400">Price AUD/oz</Label>
+                  <Input type="number" step="0.01" required value={txForm.pricePerOzAud}
+                    onChange={e => setTxForm({ ...txForm, pricePerOzAud: e.target.value })}
                     className="bg-zinc-800 border-zinc-700 text-zinc-100 h-8 text-sm" />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs text-zinc-400">Location</Label>
-                  <Input value={form.location} onChange={e => setForm({ ...form, location: e.target.value })}
-                    className="bg-zinc-800 border-zinc-700 text-zinc-100 h-8 text-sm" />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs text-zinc-400">Storage Type</Label>
-                  <select value={form.storageType} onChange={e => setForm({ ...form, storageType: e.target.value })}
-                    className="w-full bg-zinc-800 border border-zinc-700 text-zinc-100 h-8 text-sm rounded px-2">
-                    <option value="unallocated">Unallocated</option>
-                    <option value="allocated">Allocated</option>
-                    <option value="certificate">Certificate</option>
-                    <option value="coin">Coins / Bars</option>
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs text-zinc-400">Purchase Date</Label>
-                  <Input type="date" value={form.purchaseDate}
-                    onChange={e => setForm({ ...form, purchaseDate: e.target.value })}
+                  <Label className="text-xs text-zinc-400">Fee AUD</Label>
+                  <Input type="number" step="0.01" value={txForm.feeAud}
+                    onChange={e => setTxForm({ ...txForm, feeAud: e.target.value })}
                     className="bg-zinc-800 border-zinc-700 text-zinc-100 h-8 text-sm" />
                 </div>
                 <div className="space-y-1 col-span-2">
                   <Label className="text-xs text-zinc-400">Notes</Label>
-                  <Input value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })}
+                  <Input value={txForm.notes} onChange={e => setTxForm({ ...txForm, notes: e.target.value })}
                     className="bg-zinc-800 border-zinc-700 text-zinc-100 h-8 text-sm" />
                 </div>
-                <div className="col-span-full flex gap-2">
-                  <Button type="submit" className="bg-zinc-700 hover:bg-zinc-600 text-zinc-100">
-                    {editing ? "Save Changes" : `Add to ${form.account === "personal" ? "My Holdings" : "Maxwell"}`}
-                  </Button>
-                  {editing && (
-                    <Button type="button" variant="ghost" onClick={() => setEditing(null)} className="text-zinc-500">
-                      Cancel
-                    </Button>
-                  )}
+              </div>
+
+              {/* Live mirror preview — Maxwell's counterpart in My Holdings */}
+              {txForm.account === "maxwell" && (
+                <div className="rounded-md border border-dashed border-zinc-700 bg-zinc-950/50 p-3 space-y-1">
+                  <p className="text-xs text-zinc-400 uppercase tracking-wide">Mirror transaction — My Holdings</p>
+                  <p className="text-sm text-zinc-300">
+                    <span className={txForm.type === "buy" ? "text-red-400" : "text-emerald-400"}>
+                      {txForm.type === "buy" ? "Sell" : "Buy"}
+                    </span>
+                    {" "}{txForm.ounces || "—"} oz t {txForm.metal}
+                    {txForm.pricePerOzAud ? ` @ $${txForm.pricePerOzAud}/oz` : ""}
+                    {txForm.date ? ` on ${txForm.date}` : ""}
+                    {" "}· fee $0.00
+                  </p>
                 </div>
+              )}
+
+              <div className="col-span-full flex gap-2">
+                <Button type="submit" className="bg-zinc-700 hover:bg-zinc-600 text-zinc-100">
+                  Add Transaction
+                </Button>
               </div>
             </form>
           </CardContent>
@@ -326,7 +315,7 @@ export default function MetalsPage() {
       ) : holdings.length === 0 ? (
         <Card className="bg-zinc-900 border-zinc-800">
           <CardContent className="pt-6 text-center text-zinc-500 text-sm">
-            No metal holdings yet. Click "+ Add Holding" to add your Perth Mint gold.
+            No metal holdings yet. Click “+ Add Transaction” to record your Perth Mint gold.
           </CardContent>
         </Card>
       ) : (
@@ -390,7 +379,7 @@ export default function MetalsPage() {
                         )}
                         {value != null && (
                           <div className="text-right">
-                            <p className="text-xs text-zinc-400">Value</p>
+                            <p className="text-xs text-zinc-400" title="Estimated from COMEX gold futures converted to AUD — not Perth Mint's live buy/sell price, which typically differs by 1-2%">Value (est.)</p>
                             <p className="font-medium">${fmt(value, 0)}</p>
                           </div>
                         )}
@@ -402,12 +391,58 @@ export default function MetalsPage() {
                             </p>
                           </div>
                         )}
-                        <Button variant="ghost" size="sm" onClick={() => startEdit(h)} className="text-zinc-500 hover:text-zinc-200 h-7 text-xs">Edit</Button>
-                        <Button variant="ghost" size="sm" onClick={() => handleDelete(h.id)} className="text-zinc-500 hover:text-red-400 h-7 text-xs">Remove</Button>
                       </div>
                     </div>
                   );
                 })}
+
+                {/* Transaction history toggle */}
+                {transactions.some(t => (t.account ?? "personal") === acct) && (
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowHistory(s => ({ ...s, [acct]: !s[acct] }))}
+                      className="text-xs text-zinc-500 hover:text-zinc-300 underline underline-offset-2"
+                    >
+                      {showHistory[acct] ? "Hide" : "Show"} transaction history
+                      ({transactions.filter(t => (t.account ?? "personal") === acct).length})
+                    </button>
+                    {showHistory[acct] && (
+                      <div className="mt-2 overflow-x-auto rounded-lg border border-zinc-800">
+                        <table className="w-full text-xs">
+                          <thead className="bg-zinc-900 text-zinc-500 uppercase tracking-wide">
+                            <tr>
+                              <th className="text-left font-medium px-3 py-2">Date</th>
+                              <th className="text-left font-medium px-3 py-2">Type</th>
+                              <th className="text-right font-medium px-3 py-2">Oz</th>
+                              <th className="text-right font-medium px-3 py-2">Price/oz</th>
+                              <th className="text-right font-medium px-3 py-2">Fee</th>
+                              <th className="text-right font-medium px-3 py-2">Total</th>
+                              <th className="text-right font-medium px-3 py-2">Realized G/L</th>
+                              <th className="text-left font-medium px-3 py-2">Source</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {transactions.filter(t => (t.account ?? "personal") === acct).map(t => (
+                              <tr key={t.id} className="border-t border-zinc-800 text-zinc-300">
+                                <td className="px-3 py-1.5 whitespace-nowrap">{t.date}</td>
+                                <td className={`px-3 py-1.5 capitalize ${t.type === "buy" ? "text-emerald-400" : "text-red-400"}`}>{t.type}</td>
+                                <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmt(Math.abs(t.ounces), 4)}</td>
+                                <td className="px-3 py-1.5 text-right whitespace-nowrap">{t.pricePerOzAud != null ? `$${fmt(t.pricePerOzAud, 2)}` : "—"}</td>
+                                <td className="px-3 py-1.5 text-right whitespace-nowrap">{t.feeAud != null ? `$${fmt(t.feeAud, 2)}` : "—"}</td>
+                                <td className="px-3 py-1.5 text-right whitespace-nowrap">{t.totalAud != null ? `${t.totalAud < 0 ? "-" : ""}$${fmt(Math.abs(t.totalAud), 2)}` : "—"}</td>
+                                <td className={`px-3 py-1.5 text-right whitespace-nowrap ${t.realizedGainAud == null ? "" : t.realizedGainAud >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                                  {t.realizedGainAud != null ? `${t.realizedGainAud >= 0 ? "+" : ""}$${fmt(t.realizedGainAud, 2)}` : "—"}
+                                </td>
+                                <td className="px-3 py-1.5 text-zinc-500 whitespace-nowrap">{t.source ?? "—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -420,10 +455,10 @@ export default function MetalsPage() {
           {/* Portfolio weight */}
           <Card className="bg-zinc-900 border-zinc-800">
             <CardContent className="pt-4">
-              <p className="text-xs text-zinc-400 uppercase tracking-wide">Metals Value</p>
+              <p className="text-xs text-zinc-400 uppercase tracking-wide">Metals Value (est.)</p>
               <p className="text-xl font-bold mt-1">${fmt(metalsValue, 0)}</p>
               <p className="text-xs text-zinc-500 mt-1">
-                See Portfolio page for total allocation weight across all accounts
+                Estimated from COMEX spot — no live Perth Mint price feed, so this can differ from your actual account value by 1-2%. See Portfolio page for total allocation weight across all accounts.
               </p>
             </CardContent>
           </Card>
@@ -455,7 +490,7 @@ export default function MetalsPage() {
                   <>
                     <p className="text-xl font-bold mt-1">{fmt(ozAtSpot, 4)} oz</p>
                     <p className="text-xs text-zinc-500 mt-1">
-                      Your gold cost ({fmt(totalOz, 4)} oz) buys {fmt(ozAtSpot, 4)} oz at today's spot
+                      Your gold cost ({fmt(totalOz, 4)} oz) buys {fmt(ozAtSpot, 4)} oz at today’s spot
                       {ozAtSpot < totalOz ? ` — ${fmt(((totalOz - ozAtSpot) / totalOz) * 100, 1)}% more oz when you bought` : ` — up ${fmt(((ozAtSpot - totalOz) / totalOz) * 100, 1)}%`}
                     </p>
                   </>
@@ -468,7 +503,8 @@ export default function MetalsPage() {
 
       {prices && (
         <p className="text-xs text-zinc-600">
-          Prices via COMEX futures (GC=F, SI=F) · Last updated {new Date(prices.fetchedAt).toLocaleTimeString("en-AU")} · 15-min cache
+          Prices via COMEX futures (GC=F, SI=F) · Last updated {new Date(prices.fetchedAt).toLocaleTimeString("en-AU")} · 15-min cache ·
+          {" "}Holding values are estimates — there’s no live Perth Mint price feed, so actual account value may differ by 1-2%.
         </p>
       )}
     </div>

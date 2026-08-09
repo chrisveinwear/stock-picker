@@ -33,7 +33,7 @@ type Consensus = {
   intrinsicValueHigh: number | null;
 };
 
-type MetalHolding = { id: number; metal: string; ounces: number; avgCostAud: number | null; label: string | null; account: string | null };
+type MetalHolding = { id: string; metal: string; ounces: number; avgCostAud: number | null; label: string | null; account: string | null };
 type MetalPrices = { goldAud: number; silverAud: number; audUsd: number };
 
 const METAL_SPOT: Record<string, keyof MetalPrices> = { gold: "goldAud", silver: "silverAud" };
@@ -327,7 +327,6 @@ export default function PortfolioPage() {
         {accountsToShow.map((acct) => {
           const list = byAccount[acct] ?? [];
           const { cost, value: acctValue, pnl, pnlPct } = accountTotals(list);
-          const acctTotalValue = acctValue + accountMetalsValue(acct);
           const wtDenom = weightDenominator(acct);
           return (
             <div key={acct} className="space-y-3">

@@ -28,6 +28,11 @@ const verdictColor: Record<string, string> = {
 
 const ms = (d: string) => new Date(`${d}T00:00:00Z`).getTime();
 
+// ── Layout & scales ──────────────────────────────────────────────────────
+const CHART_W = 720;
+const CHART_H = 300;
+const CHART_MARGIN = { top: 16, right: 16, bottom: 28, left: 52 };
+
 function pickPeriod(oldest: string | undefined): "1y" | "2y" | "5y" {
   if (!oldest) return "1y";
   const ageDays = (Date.now() - ms(oldest)) / 86_400_000;
@@ -79,12 +84,8 @@ export default function FairValueHistoryChart({ ticker, isCommodity, currency = 
   const fmtDate = (t: number) =>
     new Date(t).toLocaleDateString("en-AU", { month: "short", year: "2-digit" });
 
-  // ── Layout & scales ──────────────────────────────────────────────────────
-  const W = 720;
-  const H = 300;
-  const m = { top: 16, right: 16, bottom: 28, left: 52 };
-  const innerW = W - m.left - m.right;
-  const innerH = H - m.top - m.bottom;
+  const innerW = CHART_W - CHART_MARGIN.left - CHART_MARGIN.right;
+  const innerH = CHART_H - CHART_MARGIN.top - CHART_MARGIN.bottom;
 
   const geom = useMemo(() => {
     if (!fv || fv.length === 0) return null;
@@ -120,8 +121,8 @@ export default function FairValueHistoryChart({ ticker, isCommodity, currency = 
     lo -= pad;
     hi += pad;
 
-    const x = (t: number) => m.left + ((t - t0) / (t1 - t0)) * innerW;
-    const y = (v: number) => m.top + (1 - (v - lo) / (hi - lo)) * innerH;
+    const x = (t: number) => CHART_MARGIN.left + ((t - t0) / (t1 - t0)) * innerW;
+    const y = (v: number) => CHART_MARGIN.top + (1 - (v - lo) / (hi - lo)) * innerH;
 
     const linePath = (pts: { t: number; v: number }[]) =>
       pts.map((p, i) => `${i === 0 ? "M" : "L"}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
@@ -183,13 +184,13 @@ export default function FairValueHistoryChart({ ticker, isCommodity, currency = 
       </div>
 
       <div className="overflow-x-auto">
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ minWidth: 320 }} role="img"
+        <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} className="w-full" style={{ minWidth: 320 }} role="img"
              aria-label={`Price vs fair value over time for ${ticker}`}>
           {/* Y gridlines + labels */}
           {geom.yTicks.map((v, i) => (
             <g key={i}>
-              <line x1={m.left} x2={W - m.right} y1={geom.y(v)} y2={geom.y(v)} stroke="#27272a" strokeWidth={1} />
-              <text x={m.left - 8} y={geom.y(v)} textAnchor="end" dominantBaseline="middle" fontSize={10} fill="#71717a">
+              <line x1={CHART_MARGIN.left} x2={CHART_W - CHART_MARGIN.right} y1={geom.y(v)} y2={geom.y(v)} stroke="#27272a" strokeWidth={1} />
+              <text x={CHART_MARGIN.left - 8} y={geom.y(v)} textAnchor="end" dominantBaseline="middle" fontSize={10} fill="#71717a">
                 {fmt(v)}
               </text>
             </g>
@@ -197,7 +198,7 @@ export default function FairValueHistoryChart({ ticker, isCommodity, currency = 
 
           {/* X labels at each report date */}
           {geom.fvPoints.map((p, i) => (
-            <text key={i} x={geom.x(p.t)} y={H - 8} textAnchor="middle" fontSize={10} fill="#71717a">
+            <text key={i} x={geom.x(p.t)} y={CHART_H - 8} textAnchor="middle" fontSize={10} fill="#71717a">
               {fmtDate(p.t)}
             </text>
           ))}
@@ -206,7 +207,7 @@ export default function FairValueHistoryChart({ ticker, isCommodity, currency = 
           {geom.bandPath && <path d={geom.bandPath} fill="rgba(245,158,11,0.14)" stroke="none" />}
           {geom.bandStrip && (
             <rect
-              x={m.left}
+              x={CHART_MARGIN.left}
               width={innerW}
               y={Math.min(geom.bandStrip.y1, geom.bandStrip.y2)}
               height={Math.abs(geom.bandStrip.y2 - geom.bandStrip.y1)}
@@ -220,7 +221,7 @@ export default function FairValueHistoryChart({ ticker, isCommodity, currency = 
           {/* Fair value: line for ≥2 points, dashed reference line for a single point */}
           {geom.singleFv ? (
             <line
-              x1={m.left} x2={W - m.right}
+              x1={CHART_MARGIN.left} x2={CHART_W - CHART_MARGIN.right}
               y1={geom.y(geom.singleFv.fairValue as number)} y2={geom.y(geom.singleFv.fairValue as number)}
               stroke="#fbbf24" strokeWidth={1.5} strokeDasharray="5 4"
             />

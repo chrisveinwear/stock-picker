@@ -12,7 +12,8 @@
  * small list from being needlessly regenerated every few days.
  */
 import { getDb } from "@/db";
-import { watchlist, portfolioHoldings, metalHoldings, researchReports } from "@/db/schema";
+import { watchlist, portfolioHoldings, researchReports } from "@/db/schema";
+import { getMetalPositions } from "@/lib/metals";
 import { isMetalTicker } from "@/lib/metal-tickers";
 import { desc } from "drizzle-orm";
 
@@ -128,7 +129,7 @@ export function buildRefreshTargets(): RefreshTarget[] {
   }
 
   // Physical metals → bare upper-case ticker (matches reports like GOLD)
-  for (const m of db.select().from(metalHoldings).all()) {
+  for (const m of getMetalPositions(db)) {
     const ticker = m.metal.trim().toUpperCase();
     upsert(ticker, "metal", m.label ?? null, "metals");
   }

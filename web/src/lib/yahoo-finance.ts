@@ -311,8 +311,6 @@ export type MetalPrices = {
   fromCache: boolean;
 };
 
-const METAL_CACHE_KEY = "METAL_PRICES";
-
 /** Fetch a Yahoo Finance quote without any .AX normalisation — for futures/forex tickers */
 async function getRawQuote(ticker: string): Promise<{ price: number; prevClose: number | null }> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

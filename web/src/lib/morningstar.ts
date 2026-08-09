@@ -15,7 +15,7 @@
 
 import { getDb } from "@/db";
 import { morningstarData } from "@/db/schema";
-import { and, desc, eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 
 export type MoatRating = "None" | "Narrow" | "Wide";
 

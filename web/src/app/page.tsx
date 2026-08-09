@@ -1,7 +1,8 @@
 import { getDb } from "@/db";
-import { watchlist, portfolioHoldings, stockPicks, researchReports, metalHoldings } from "@/db/schema";
+import { watchlist, portfolioHoldings, stockPicks, researchReports } from "@/db/schema";
 import { desc } from "drizzle-orm";
 import { getQuotes, getMetalPrices } from "@/lib/yahoo-finance";
+import { getMetalPositions } from "@/lib/metals";
 import { getResearchAlerts } from "@/lib/research-alerts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -28,7 +29,7 @@ function pnlColour(pnl: number) {
 export default async function DashboardPage() {
   const db = getDb();
   const allHoldings  = db.select().from(portfolioHoldings).all();
-  const allMetals    = db.select().from(metalHoldings).all();
+  const allMetals    = getMetalPositions(db);
   const allWatchItems = db.select().from(watchlist).all();
   const recentReports = db.select().from(researchReports).orderBy(desc(researchReports.createdAt)).limit(5).all();
   // Headline count = tickers covered (matches the /research page badge), not

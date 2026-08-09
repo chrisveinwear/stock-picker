@@ -106,10 +106,8 @@ async function fetchViaFirecrawl(query: string, limit = 8): Promise<NewsItem[]> 
 
 async function fetchViaYahoo(ticker: string): Promise<NewsItem[]> {
   try {
-    const result = await (yahooFinance as any).quoteSummary(ticker, {
-      modules: ["assetProfile"],
-    });
     // Yahoo quoteSummary doesn't expose news easily; use search instead
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const search = await (yahooFinance as any).search(ticker, { newsCount: 8 });
     const news = (search?.news ?? []) as Array<{
       title: string;
