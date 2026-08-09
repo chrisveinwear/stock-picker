@@ -105,6 +105,33 @@ export const metalTransactions = sqliteTable("metal_transactions", {
   createdAt: text("created_at").default(sql`(datetime('now'))`),
 });
 
+// Fund/managed-investment transactions — unit-based holdings (e.g. super fund
+// options) priced per unit rather than per share. Mirrors metal_transactions:
+// current position for a (ticker, account) is derived by replaying this
+// ledger in date order (see lib/funds.ts getFundPosition), then written onto
+// the matching portfolio_holdings row so the rest of the app is unaffected.
+// units is signed (positive = bought, negative = sold). The first row for a
+// given (ticker, account) is typically a synthetic "opening_balance" entry
+// carrying forward pre-ledger history, so SUM(units) reconciles to a known
+// confirmed total rather than starting from zero.
+export const fundTransactions = sqliteTable("fund_transactions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ticker: text("ticker").notNull(),             // fund APIR code, e.g. "FSF0581AU"
+  type: text("type").notNull(),                 // "opening_balance" | "contribution" | "fee_rebate" | "rollover_withdrawal" | "tax"
+  date: text("date").notNull(),                 // ISO date "2025-07-14"
+  units: real("units").notNull(),               // signed: + bought, - sold
+  unitPrice: real("unit_price"),                // unit price at transaction (null for opening_balance)
+  grossAud: real("gross_aud"),                  // before-tax amount (unsigned), if applicable
+  taxAud: real("tax_aud"),                      // tax withheld (unsigned), if applicable
+  netAud: real("net_aud"),                      // after-tax dollar amount that bought/sold the units (unsigned)
+  avgCostAudAfter: real("avg_cost_aud_after"),  // running weighted-avg cost/unit immediately after this row
+  realizedGainAud: real("realized_gain_aud"),   // sells only: (unit price - prior avg cost) * units sold
+  account: text("account").default("super"),    // "super" | "personal" | "maxwell"
+  source: text("source"),                       // e.g. "Colonial First State - FirstChoice Wholesale Personal Super"
+  notes: text("notes"),                         // e.g. "Super Guarantee from Fable Food Pty Ltd"
+  createdAt: text("created_at").default(sql`(datetime('now'))`),
+});
+
 // Valuation assumption overrides — layered on top of the git-versioned file
 // defaults by the valuation engine's resolver. scope = "global" | a sector name
 // | a ticker; more specific scopes win. File defaults remain the audit baseline.

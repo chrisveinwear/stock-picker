@@ -17,6 +17,7 @@ type Holding = {
   source: string;
   manualPrice: number | null;
   priceType: string | null;
+  hasLedger?: boolean;
 };
 
 type Quote = { ticker: string; lastPrice: number; changePercent: number | null };
@@ -52,6 +53,7 @@ export default function PortfolioPage() {
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ ticker: "", companyName: "", sector: "", shares: "", avgCost: "", manualPrice: "", account: "personal" });
+  const [addError, setAddError] = useState<string | null>(null);
   const [editingPrice, setEditingPrice] = useState<{ id: number; value: string } | null>(null);
   const [syncing, setSyncing] = useState<string | null>(null);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
@@ -109,7 +111,8 @@ export default function PortfolioPage() {
 
   async function handleAdd(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    await fetch("/api/portfolio", {
+    setAddError(null);
+    const res = await fetch("/api/portfolio", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -119,6 +122,11 @@ export default function PortfolioPage() {
         manualPrice: form.manualPrice ? parseFloat(form.manualPrice) : null,
       }),
     });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setAddError(data.error ?? "Failed to save holding.");
+      return;
+    }
     setForm({ ticker: "", companyName: "", sector: "", shares: "", avgCost: "", manualPrice: "", account: "personal" });
     setShowAdd(false);
     load();
@@ -255,7 +263,11 @@ export default function PortfolioPage() {
       )}
 
       {/* Add holding form */}
-      {showAdd && (
+      {showAdd && (() => {
+        const typedTicker = form.ticker.trim().toUpperCase();
+        const ledgerMatch = holdings.find((h) => h.hasLedger && h.ticker === typedTicker && h.account === form.account);
+        const LOCKED_FIELDS = new Set(["shares", "avgCost"]);
+        return (
         <Card className="bg-zinc-900 border-zinc-800">
           <CardHeader><CardTitle className="text-sm">Add Holding</CardTitle></CardHeader>
           <CardContent>
@@ -285,6 +297,12 @@ export default function PortfolioPage() {
                 </div>
               </div>
 
+              {ledgerMatch && (
+                <p className="text-xs text-amber-400 bg-amber-950/40 border border-amber-900 rounded px-3 py-2">
+                  {typedTicker} is derived from a transaction ledger — units and avg cost are locked here. Import a new statement (scripts/import-cfs-super-transactions.ts) to update them.
+                </p>
+              )}
+
               {/* Rest of the fields */}
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 {[
@@ -294,29 +312,40 @@ export default function PortfolioPage() {
                   { key: "shares", label: "Units / Shares", type: "number", required: true },
                   { key: "avgCost", label: "Avg Cost Per Unit (AUD, 0 if unknown)", type: "number" },
                   { key: "manualPrice", label: "Current Unit Price (managed funds)", type: "number" },
-                ].map((f) => (
-                  <div key={f.key} className="space-y-1">
-                    <Label className="text-xs text-zinc-400">{f.label}</Label>
-                    <Input
-                      type={f.type ?? "text"}
-                      step="0.0001"
-                      value={(form as Record<string, string>)[f.key]}
-                      onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
-                      required={f.required}
-                      className="bg-zinc-800 border-zinc-700 text-zinc-100 h-8 text-sm"
-                    />
-                  </div>
-                ))}
-                <div className="col-span-full">
-                  <Button type="submit" className="bg-zinc-700 hover:bg-zinc-600 text-zinc-100">
-                    Add to {form.account === "personal" ? "My Portfolio" : form.account === "super" ? "Superannuation" : "Maxwell"}
+                ].map((f) => {
+                  const locked = ledgerMatch && LOCKED_FIELDS.has(f.key);
+                  return (
+                    <div key={f.key} className="space-y-1">
+                      <Label className="text-xs text-zinc-400">{f.label}</Label>
+                      {locked ? (
+                        <div className="h-8 flex items-center px-3 text-xs text-zinc-500 bg-zinc-800/50 border border-zinc-800 rounded-md">
+                          {f.key === "shares" ? ledgerMatch.shares.toLocaleString("en-AU", { maximumFractionDigits: 4 }) : ledgerMatch.avgCost.toFixed(6)} (locked)
+                        </div>
+                      ) : (
+                        <Input
+                          type={f.type ?? "text"}
+                          step="0.0001"
+                          value={(form as Record<string, string>)[f.key]}
+                          onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
+                          required={f.required}
+                          className="bg-zinc-800 border-zinc-700 text-zinc-100 h-8 text-sm"
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+                <div className="col-span-full space-y-2">
+                  {addError && <p className="text-xs text-red-400">{addError}</p>}
+                  <Button type="submit" disabled={!!ledgerMatch} className="bg-zinc-700 hover:bg-zinc-600 text-zinc-100 disabled:opacity-40 disabled:cursor-not-allowed">
+                    {ledgerMatch ? "Locked — ledger-derived" : `Add to ${form.account === "personal" ? "My Portfolio" : form.account === "super" ? "Superannuation" : "Maxwell"}`}
                   </Button>
                 </div>
               </div>
             </form>
           </CardContent>
         </Card>
-      )}
+        );
+      })()}
 
       {loading ? (
         <p className="text-zinc-500 text-sm">Loading…</p>
@@ -366,6 +395,7 @@ export default function PortfolioPage() {
                         {h.companyName && <span className="text-zinc-400 text-sm">{h.companyName}</span>}
                         {h.sector && <span className="text-zinc-500 text-xs">{h.sector}</span>}
                         {isManual && <span className="text-xs text-amber-500 bg-amber-950 px-1.5 py-0.5 rounded">manual price</span>}
+                        {h.hasLedger && <span className="text-xs text-blue-400 bg-blue-950 px-1.5 py-0.5 rounded">🔒 ledger-derived</span>}
                       </div>
                       <p className="text-zinc-500 text-xs mt-0.5">
                         {h.shares.toLocaleString("en-AU", { maximumFractionDigits: 4 })} units
