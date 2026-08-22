@@ -1,0 +1,68 @@
+{
+  "model": {
+    "kind": "commodity",
+    "modelVersion": "incentive-v1",
+    "ticker": "SILVER",
+    "runAt": "2026-08-22T21:30:04.897Z",
+    "ok": true,
+    "currency": "USD/oz",
+    "price": 69.46600341796875,
+    "codeFairValue": 35,
+    "codeIvLow": 23,
+    "codeIvHigh": 35,
+    "buyBelow": 35,
+    "sellAbove": 45.5,
+    "verdictZone": "avoid",
+    "spotVsIncentivePct": 98.47429547991071,
+    "costCurve": {
+      "aisc50": 23,
+      "aisc90": 30,
+      "incentivePrice": 35,
+      "thesis": "monetary",
+      "asOf": "2026-07",
+      "source": "Co-product basis: S&P Global Jan-2026 AISC $22.6 (2025) → $23.4 (2026F); World Silver Survey 2026. Incentive notional — ~72% of supply is by-product, so the cost curve barely disciplines price"
+    },
+    "assumptions": {
+      "aisc50": {
+        "value": 23,
+        "source": "default"
+      },
+      "aisc90": {
+        "value": 30,
+        "source": "default"
+      },
+      "incentivePrice": {
+        "value": 35,
+        "source": "default"
+      },
+      "overvaluedBand": {
+        "value": 0.3,
+        "source": "default"
+      },
+      "mos": {
+        "value": 0.15,
+        "source": "default"
+      }
+    },
+    "warnings": [
+      "Monetary metal trading well above its cost-curve incentive price — the cost model understates value when monetary/safe-haven demand dominates; reconcile against that thesis."
+    ]
+  },
+  "llm": {
+    "intrinsicValueLow": 23,
+    "intrinsicValueHigh": 35,
+    "fairValue": 29,
+    "consensusBuyBelow": 58,
+    "consensusSellAbove": 84
+  },
+  "dbThresholds": {
+    "buyBelow": 35,
+    "sellAbove": 45.5,
+    "source": "incentive-v1 incentive zones",
+    "kind": "commodity",
+    "fairValue": 35,
+    "lowConfidence": false
+  },
+  "divergencePct": -17.142857142857142,
+  "savedAt": "2026-08-22T21:33:21.597Z"
+}
